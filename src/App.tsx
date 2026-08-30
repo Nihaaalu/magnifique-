@@ -102,6 +102,14 @@ export default function App() {
     // Map IncomeRecord back to row format if updating
     const rowUpdates: Partial<IncomeEntryRow> = {};
     if (updates.date !== undefined) rowUpdates.entry_date = updates.date;
+    if (updates.incomeType !== undefined) {
+      rowUpdates.income_type = updates.incomeType === 'À La Carte' ? 'alacarte' : 'meal';
+    }
+    if (updates.mealPlan !== undefined) rowUpdates.meal_plan = updates.mealPlan;
+    if (updates.mealCombination !== undefined) rowUpdates.meal_combination = updates.mealCombination;
+    if (updates.breakfastPrice !== undefined) rowUpdates.breakfast_price = updates.breakfastPrice;
+    if (updates.lunchPrice !== undefined) rowUpdates.lunch_price = updates.lunchPrice;
+    if (updates.dinnerPrice !== undefined) rowUpdates.dinner_price = updates.dinnerPrice;
     if (updates.mealType !== undefined) rowUpdates.meal_type = updates.mealType;
     if (updates.byWho !== undefined) rowUpdates.by_who = updates.byWho;
     if (updates.travels !== undefined) rowUpdates.travel_name = updates.travels || null;

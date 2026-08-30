@@ -2,6 +2,17 @@ export type TabType = 'income' | 'expense' | 'partner' | 'analytics';
 
 export type MealType = 'Breakfast' | 'Lunch' | 'Dinner';
 export type IncomeType = 'Meal' | 'À La Carte';
+export type MealPlan = '1_time' | '2_time' | '3_time' | 'alacarte';
+export type MealCombination =
+  | 'breakfast'
+  | 'lunch'
+  | 'dinner'
+  | 'breakfast_lunch'
+  | 'breakfast_dinner'
+  | 'lunch_dinner'
+  | 'all'
+  | null;
+
 export type PaymentStatus = 'Paid Full' | 'Paid Partially' | 'Balance';
 
 // Database Models
@@ -23,17 +34,22 @@ export interface PartnerCurrentBalance {
 export interface IncomeEntryRow {
   id: string;
   entry_date: string;
-  income_type: IncomeType;
-  meal_type: string | null;
+  income_type: 'meal' | 'alacarte' | IncomeType;
+  meal_plan: MealPlan;
+  meal_combination: MealCombination;
+  breakfast_price: number | null;
+  lunch_price: number | null;
+  dinner_price: number | null;
+  meal_type?: string | null;
   travel_name: string | null;
   member_count: number | null;
-  price_per_member: number | null;
+  price_per_member?: number | null;
   total_amount: number;
   amount_received: number;
   balance_amount: number;
-  payment_status: 'Paid Full' | 'Balance';
-  by_who: string;
-  balance_account_partner_id: string | null;
+  payment_status: 'paid_full' | 'paid_partial' | 'balance' | 'Paid Full' | 'Balance';
+  by_who: string | null;
+  balance_account_partner_id: string | number | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -43,7 +59,12 @@ export interface IncomeRecord {
   date: string; // entry_date YYYY-MM-DD
   time?: string;
   incomeType: IncomeType;
-  mealType: MealType | null;
+  mealPlan: MealPlan;
+  mealCombination: MealCombination;
+  breakfastPrice?: number | null;
+  lunchPrice?: number | null;
+  dinnerPrice?: number | null;
+  mealType?: MealType | null;
   byWho: string;
   travels?: string;
   membersCount: number;

@@ -1,5 +1,12 @@
 import React, { useState } from 'react';
-import { IncomeRecord, ExpenseRecord, Partner, MealType, PaymentStatus, IncomeType } from '../types';
+import {
+  IncomeRecord,
+  ExpenseRecord,
+  Partner,
+  PaymentStatus,
+  MealPlan,
+  MealCombination,
+} from '../types';
 import {
   LedgerPeriodMode,
   DateRange,
@@ -38,6 +45,9 @@ interface IncomeLedgerProps {
   onUpdateIncome?: (id: string, updatedRecord: Partial<IncomeRecord>) => void | Promise<void>;
 }
 
+type OneTimeMeal = 'breakfast' | 'lunch' | 'dinner';
+type TwoTimeCombo = 'breakfast_lunch' | 'breakfast_dinner' | 'lunch_dinner';
+
 export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   incomeRecords,
   expenseRecords,
@@ -67,11 +77,15 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   // Edit Modal State
   const [editingRecord, setEditingRecord] = useState<IncomeRecord | null>(null);
   const [editDate, setEditDate] = useState<string>('');
-  const [editMeal, setEditMeal] = useState<MealType | null>('Breakfast');
+  const [editPlan, setEditPlan] = useState<MealPlan>('1_time');
+  const [editOneTimeMeal, setEditOneTimeMeal] = useState<OneTimeMeal>('breakfast');
+  const [editTwoTimeCombo, setEditTwoTimeCombo] = useState<TwoTimeCombo>('breakfast_lunch');
   const [editByWho, setEditByWho] = useState<string>('');
   const [editTravels, setEditTravels] = useState<string>('');
   const [editMembers, setEditMembers] = useState<string>('');
-  const [editPrice, setEditPrice] = useState<string>('');
+  const [editBreakfastPrice, setEditBreakfastPrice] = useState<string>('');
+  const [editLunchPrice, setEditLunchPrice] = useState<string>('');
+  const [editDinnerPrice, setEditDinnerPrice] = useState<string>('');
   const [editTotal, setEditTotal] = useState<string>('');
   const [editPaymentStatus, setEditPaymentStatus] = useState<PaymentStatus>('Paid Full');
   const [editAmountPaid, setEditAmountPaid] = useState<string>('');
@@ -164,13 +178,6 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     return (b.time || '').localeCompare(a.time || '');
   });
 
-  const groupedByDate = new Map<string, IncomeRecord[]>();
-  for (const record of sortedRecords) {
-    const existing = groupedByDate.get(record.date) || [];
-    existing.push(record);
-    groupedByDate.set(record.date, existing);
-  }
-
   const handleApplyCustomRange = (e: React.FormEvent) => {
     e.preventDefault();
     if (customRange.startDate > customRange.endDate) {
@@ -183,15 +190,140 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     }
   };
 
+  const getRecordPlanDetails = (record: IncomeRecord) => {
+    const isAlaCarte =
+      record.mealPlan === 'alacarte' ||
+      record.incomeType === 'À La Carte' ||
+      record.byWho === 'À LA CARTE';
+
+    if (isAlaCarte) {
+      return {
+        label: 'À LA CARTE',
+        fullDescription: 'À LA CARTE',
+        priceBreakdown: '',
+        isAlaCarte: true,
+      };
+    }
+
+    if (record.mealPlan === '3_time' || record.mealCombination === 'all') {
+      const bP = record.breakfastPrice ? `₹${record.breakfastPrice}` : '';
+      const lP = record.lunchPrice ? `₹${record.lunchPrice}` : '';
+      const dP = record.dinnerPrice ? `₹${record.dinnerPrice}` : '';
+      const prices = [bP, lP, dP].filter(Boolean).join(' + ');
+      return {
+        label: '3 TIME',
+        fullDescription: 'Breakfast + Lunch + Dinner',
+        priceBreakdown: prices ? `${prices} (₹${record.pricePerMember}/PAX)` : `₹${record.pricePerMember}/PAX`,
+        isAlaCarte: false,
+      };
+    }
+
+    if (record.mealPlan === '2_time') {
+      if (record.mealCombination === 'breakfast_lunch') {
+        const bP = record.breakfastPrice ? `₹${record.breakfastPrice}` : '';
+        const lP = record.lunchPrice ? `₹${record.lunchPrice}` : '';
+        const prices = [bP, lP].filter(Boolean).join(' + ');
+        return {
+          label: '2 TIME',
+          fullDescription: 'Breakfast + Lunch',
+          priceBreakdown: prices ? `${prices} (₹${record.pricePerMember}/PAX)` : `₹${record.pricePerMember}/PAX`,
+          isAlaCarte: false,
+        };
+      }
+      if (record.mealCombination === 'breakfast_dinner') {
+        const bP = record.breakfastPrice ? `₹${record.breakfastPrice}` : '';
+        const dP = record.dinnerPrice ? `₹${record.dinnerPrice}` : '';
+        const prices = [bP, dP].filter(Boolean).join(' + ');
+        return {
+          label: '2 TIME',
+          fullDescription: 'Breakfast + Dinner',
+          priceBreakdown: prices ? `${prices} (₹${record.pricePerMember}/PAX)` : `₹${record.pricePerMember}/PAX`,
+          isAlaCarte: false,
+        };
+      }
+      if (record.mealCombination === 'lunch_dinner') {
+        const lP = record.lunchPrice ? `₹${record.lunchPrice}` : '';
+        const dP = record.dinnerPrice ? `₹${record.dinnerPrice}` : '';
+        const prices = [lP, dP].filter(Boolean).join(' + ');
+        return {
+          label: '2 TIME',
+          fullDescription: 'Lunch + Dinner',
+          priceBreakdown: prices ? `${prices} (₹${record.pricePerMember}/PAX)` : `₹${record.pricePerMember}/PAX`,
+          isAlaCarte: false,
+        };
+      }
+      return {
+        label: '2 TIME',
+        fullDescription: '2 Time Meals',
+        priceBreakdown: `₹${record.pricePerMember}/PAX`,
+        isAlaCarte: false,
+      };
+    }
+
+    // Default 1 TIME
+    let mealName = 'Breakfast';
+    if (record.mealCombination === 'lunch' || record.mealType === 'Lunch') {
+      mealName = 'Lunch';
+    } else if (record.mealCombination === 'dinner' || record.mealType === 'Dinner') {
+      mealName = 'Dinner';
+    }
+    const singlePrice = record.pricePerMember || record.breakfastPrice || record.lunchPrice || record.dinnerPrice || 0;
+    return {
+      label: '1 TIME',
+      fullDescription: mealName,
+      priceBreakdown: singlePrice > 0 ? `₹${singlePrice}/PAX` : '',
+      isAlaCarte: false,
+    };
+  };
+
   const handleOpenEdit = (record: IncomeRecord) => {
     setEditingRecord(record);
     setEditDate(record.date);
-    setEditMeal(record.mealType || 'Breakfast');
-    setEditByWho(record.byWho || '');
+
+    const isAlaCarte =
+      record.mealPlan === 'alacarte' ||
+      record.incomeType === 'À La Carte' ||
+      record.byWho === 'À LA CARTE';
+
+    if (isAlaCarte) {
+      setEditPlan('alacarte');
+      setEditByWho('');
+      setEditMembers('');
+      setEditBreakfastPrice('');
+      setEditLunchPrice('');
+      setEditDinnerPrice('');
+      setEditTotal(String(record.total));
+    } else {
+      const plan = record.mealPlan || '1_time';
+      setEditPlan(plan);
+      setEditByWho(record.byWho || 'IRSHAD');
+      setEditMembers(record.membersCount ? String(record.membersCount) : '');
+      setEditTotal(String(record.total));
+
+      if (plan === '1_time') {
+        const meal = (record.mealCombination as OneTimeMeal) || (record.mealType?.toLowerCase() as OneTimeMeal) || 'breakfast';
+        setEditOneTimeMeal(meal === 'lunch' || meal === 'dinner' ? meal : 'breakfast');
+        if (meal === 'lunch') {
+          setEditLunchPrice(record.lunchPrice ? String(record.lunchPrice) : String(record.pricePerMember || ''));
+        } else if (meal === 'dinner') {
+          setEditDinnerPrice(record.dinnerPrice ? String(record.dinnerPrice) : String(record.pricePerMember || ''));
+        } else {
+          setEditBreakfastPrice(record.breakfastPrice ? String(record.breakfastPrice) : String(record.pricePerMember || ''));
+        }
+      } else if (plan === '2_time') {
+        const combo = (record.mealCombination as TwoTimeCombo) || 'breakfast_lunch';
+        setEditTwoTimeCombo(combo);
+        setEditBreakfastPrice(record.breakfastPrice ? String(record.breakfastPrice) : '');
+        setEditLunchPrice(record.lunchPrice ? String(record.lunchPrice) : '');
+        setEditDinnerPrice(record.dinnerPrice ? String(record.dinnerPrice) : '');
+      } else if (plan === '3_time') {
+        setEditBreakfastPrice(record.breakfastPrice ? String(record.breakfastPrice) : '');
+        setEditLunchPrice(record.lunchPrice ? String(record.lunchPrice) : '');
+        setEditDinnerPrice(record.dinnerPrice ? String(record.dinnerPrice) : '');
+      }
+    }
+
     setEditTravels(record.travels || '');
-    setEditMembers(record.membersCount ? String(record.membersCount) : '');
-    setEditPrice(record.pricePerMember ? String(record.pricePerMember) : '');
-    setEditTotal(String(record.total));
     setEditPaymentStatus(record.paymentStatus);
     setEditAmountPaid(record.amountPaid ? String(record.amountPaid) : '');
     setEditBalancePartnerId(record.balanceAccountPartnerId || '');
@@ -205,22 +337,76 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     setEditError(null);
 
     try {
-      const isAlaCarte = editingRecord.incomeType === 'À La Carte' || editByWho === 'À LA CARTE';
+      const isAlaCarte = editPlan === 'alacarte';
       let totalAmount = 0;
       let memberCount: number | null = null;
-      let pricePerMember: number | null = null;
+      let bPrice: number | null = null;
+      let lPrice: number | null = null;
+      let dPrice: number | null = null;
+      let mealCombo: MealCombination = null;
+      let calculatedPricePerMember = 0;
 
       if (isAlaCarte) {
         totalAmount = parseFloat(editTotal) || 0;
+        if (totalAmount <= 0) {
+          throw new Error('Total Amount must be greater than 0.');
+        }
       } else {
         memberCount = parseInt(editMembers, 10) || 0;
-        pricePerMember = parseFloat(editPrice) || 0;
-        totalAmount = memberCount * pricePerMember;
+        if (memberCount <= 0) {
+          throw new Error('Members count must be greater than 0.');
+        }
+
+        const bP = parseFloat(editBreakfastPrice) || 0;
+        const lP = parseFloat(editLunchPrice) || 0;
+        const dP = parseFloat(editDinnerPrice) || 0;
+
+        if (editPlan === '1_time') {
+          mealCombo = editOneTimeMeal;
+          if (editOneTimeMeal === 'breakfast') {
+            bPrice = bP;
+            calculatedPricePerMember = bP;
+            totalAmount = memberCount * bP;
+          } else if (editOneTimeMeal === 'lunch') {
+            lPrice = lP;
+            calculatedPricePerMember = lP;
+            totalAmount = memberCount * lP;
+          } else {
+            dPrice = dP;
+            calculatedPricePerMember = dP;
+            totalAmount = memberCount * dP;
+          }
+        } else if (editPlan === '2_time') {
+          mealCombo = editTwoTimeCombo;
+          if (editTwoTimeCombo === 'breakfast_lunch') {
+            bPrice = bP;
+            lPrice = lP;
+            calculatedPricePerMember = bP + lP;
+            totalAmount = memberCount * (bP + lP);
+          } else if (editTwoTimeCombo === 'breakfast_dinner') {
+            bPrice = bP;
+            dPrice = dP;
+            calculatedPricePerMember = bP + dP;
+            totalAmount = memberCount * (bP + dP);
+          } else {
+            lPrice = lP;
+            dPrice = dP;
+            calculatedPricePerMember = lP + dP;
+            totalAmount = memberCount * (lP + dP);
+          }
+        } else if (editPlan === '3_time') {
+          mealCombo = 'all';
+          bPrice = bP;
+          lPrice = lP;
+          dPrice = dP;
+          calculatedPricePerMember = bP + lP + dP;
+          totalAmount = memberCount * (bP + lP + dP);
+        }
       }
 
       let amountReceived = 0;
       let balanceAmount = 0;
-      let finalStatus: PaymentStatus = editPaymentStatus;
+      const finalStatus: PaymentStatus = editPaymentStatus;
 
       if (editPaymentStatus === 'Paid Full') {
         amountReceived = totalAmount;
@@ -235,11 +421,16 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
 
       await onUpdateIncome(editingRecord.id, {
         date: editDate,
-        mealType: isAlaCarte ? null : editMeal,
-        byWho: editByWho,
+        incomeType: isAlaCarte ? 'À La Carte' : 'Meal',
+        mealPlan: editPlan,
+        mealCombination: isAlaCarte ? null : mealCombo,
+        breakfastPrice: isAlaCarte ? null : bPrice,
+        lunchPrice: isAlaCarte ? null : lPrice,
+        dinnerPrice: isAlaCarte ? null : dPrice,
+        byWho: isAlaCarte ? 'À LA CARTE' : editByWho.trim().toUpperCase(),
         travels: editTravels.trim() || undefined,
-        membersCount: memberCount || 0,
-        pricePerMember: pricePerMember || 0,
+        membersCount: isAlaCarte ? 0 : (memberCount || 0),
+        pricePerMember: isAlaCarte ? 0 : calculatedPricePerMember,
         total: totalAmount,
         paymentStatus: finalStatus,
         amountPaid: amountReceived,
@@ -270,7 +461,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   };
 
   const renderRecordRow = (record: IncomeRecord) => {
-    const isAlaCarte = record.incomeType === 'À La Carte' || record.byWho === 'À LA CARTE';
+    const details = getRecordPlanDetails(record);
     const isDeleting = deletingId === record.id;
 
     return (
@@ -281,19 +472,31 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
         }`}
       >
         <div className="min-w-0 flex-1">
-          {/* Top Line: Meal & By Who */}
+          {/* Top Line: Meal Plan Tag & Details */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="font-bold text-[#D4AF37] uppercase text-[11px] bg-[#1D1D1D] px-1.5 py-0.5 rounded border border-[#2A2A2A]">
-              {isAlaCarte ? 'À LA CARTE' : record.mealType || 'Meal'}
+            <span className="font-bold text-[#D4AF37] uppercase text-[10px] sm:text-[11px] bg-[#1D1D1D] px-2 py-0.5 rounded border border-[#2A2A2A]">
+              {details.label}
             </span>
-            <span className="text-[#777777]">•</span>
             <span className="font-bold text-[#F5F5F5]">
-              {record.byWho}
+              {details.fullDescription}
             </span>
-            {!isAlaCarte && record.membersCount > 0 && (
-              <span className="text-[#B8B8B8] font-medium">
-                · {record.membersCount} PAX
-              </span>
+            {!details.isAlaCarte && (
+              <>
+                <span className="text-[#777777]">•</span>
+                <span className="font-semibold text-[#D4AF37]">
+                  {record.byWho}
+                </span>
+                {record.membersCount > 0 && (
+                  <span className="text-[#B8B8B8] font-medium">
+                    · {record.membersCount} PAX
+                  </span>
+                )}
+                {details.priceBreakdown && (
+                  <span className="text-[#777777] text-[11px]">
+                    ({details.priceBreakdown})
+                  </span>
+                )}
+              </>
             )}
             {record.travels && (
               <span className="text-[#777777] truncate">
@@ -530,12 +733,93 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
             </div>
 
             {editError && (
-              <div className="p-2.5 bg-[#201212] border border-[#3d1d1d] text-[#f87171] rounded text-xs">
+              <div className="p-2.5 bg-[#201212] border border-[#3d1d1d] text-[#f87171] rounded text-xs font-semibold">
                 {editError}
               </div>
             )}
 
-            <form onSubmit={handleSaveEdit} className="space-y-3">
+            <form onSubmit={handleSaveEdit} className="space-y-3.5">
+              {/* Plan Switcher */}
+              <div>
+                <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Plan</label>
+                <div className="grid grid-cols-4 gap-1 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]">
+                  {(
+                    [
+                      { id: '1_time', label: '1 TIME' },
+                      { id: '2_time', label: '2 TIME' },
+                      { id: '3_time', label: '3 TIME' },
+                      { id: 'alacarte', label: 'À LA CARTE' },
+                    ] as { id: MealPlan; label: string }[]
+                  ).map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setEditPlan(p.id)}
+                      className={`py-1 text-[11px] font-bold rounded ${
+                        editPlan === p.id
+                          ? 'bg-[#D4AF37] text-[#0A0A0A]'
+                          : 'text-[#B8B8B8] hover:text-[#F5F5F5]'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sub-selector for 1 TIME */}
+              {editPlan === '1_time' && (
+                <div>
+                  <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Select Meal</label>
+                  <div className="grid grid-cols-3 gap-1 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]">
+                    {(['breakfast', 'lunch', 'dinner'] as OneTimeMeal[]).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setEditOneTimeMeal(m)}
+                        className={`py-1 text-[11px] font-bold rounded capitalize ${
+                          editOneTimeMeal === m
+                            ? 'bg-[#F2C94C] text-[#0A0A0A]'
+                            : 'text-[#B8B8B8] hover:text-[#F5F5F5]'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-selector for 2 TIME */}
+              {editPlan === '2_time' && (
+                <div>
+                  <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Combination</label>
+                  <div className="grid grid-cols-3 gap-1 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]">
+                    {(
+                      [
+                        { id: 'breakfast_lunch', label: 'B + L' },
+                        { id: 'breakfast_dinner', label: 'B + D' },
+                        { id: 'lunch_dinner', label: 'L + D' },
+                      ] as { id: TwoTimeCombo; label: string }[]
+                    ).map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setEditTwoTimeCombo(c.id)}
+                        className={`py-1 text-[11px] font-bold rounded ${
+                          editTwoTimeCombo === c.id
+                            ? 'bg-[#F2C94C] text-[#0A0A0A]'
+                            : 'text-[#B8B8B8] hover:text-[#F5F5F5]'
+                        }`}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Common Date & By Who */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Date</label>
@@ -547,56 +831,192 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                     required
                   />
                 </div>
-                <div>
-                  <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">By Who</label>
-                  <input
-                    type="text"
-                    value={editByWho}
-                    onChange={(e) => setEditByWho(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                    required
-                  />
-                </div>
+                {editPlan !== 'alacarte' && (
+                  <div>
+                    <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">By Who</label>
+                    <input
+                      type="text"
+                      value={editByWho}
+                      onChange={(e) => setEditByWho(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                      required
+                    />
+                  </div>
+                )}
               </div>
 
-              {editingRecord.incomeType !== 'À La Carte' && (
-                <div className="grid grid-cols-3 gap-2">
+              {/* Members & Prices for Meals */}
+              {editPlan !== 'alacarte' ? (
+                <div className="space-y-2">
                   <div>
-                    <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Meal</label>
-                    <select
-                      value={editMeal || 'Breakfast'}
-                      onChange={(e) => setEditMeal(e.target.value as MealType)}
-                      className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                    >
-                      <option value="Breakfast">Breakfast</option>
-                      <option value="Lunch">Lunch</option>
-                      <option value="Dinner">Dinner</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Members</label>
+                    <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Members (PAX)</label>
                     <input
                       type="number"
                       value={editMembers}
                       onChange={(e) => setEditMembers(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                      placeholder="150"
+                      className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                      required
                     />
                   </div>
-                  <div>
-                    <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Price</label>
-                    <input
-                      type="number"
-                      value={editPrice}
-                      onChange={(e) => setEditPrice(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
-                    />
-                  </div>
-                </div>
-              )}
 
-              {editingRecord.incomeType === 'À La Carte' && (
+                  {/* Dynamic Price inputs */}
+                  {editPlan === '1_time' && (
+                    <div>
+                      {editOneTimeMeal === 'breakfast' && (
+                        <div>
+                          <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Breakfast Price (₹)</label>
+                          <input
+                            type="number"
+                            value={editBreakfastPrice}
+                            onChange={(e) => setEditBreakfastPrice(e.target.value)}
+                            className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                            required
+                          />
+                        </div>
+                      )}
+                      {editOneTimeMeal === 'lunch' && (
+                        <div>
+                          <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Lunch Price (₹)</label>
+                          <input
+                            type="number"
+                            value={editLunchPrice}
+                            onChange={(e) => setEditLunchPrice(e.target.value)}
+                            className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                            required
+                          />
+                        </div>
+                      )}
+                      {editOneTimeMeal === 'dinner' && (
+                        <div>
+                          <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Dinner Price (₹)</label>
+                          <input
+                            type="number"
+                            value={editDinnerPrice}
+                            onChange={(e) => setEditDinnerPrice(e.target.value)}
+                            className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                            required
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {editPlan === '2_time' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {editTwoTimeCombo === 'breakfast_lunch' && (
+                        <>
+                          <div>
+                            <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Breakfast (₹)</label>
+                            <input
+                              type="number"
+                              value={editBreakfastPrice}
+                              onChange={(e) => setEditBreakfastPrice(e.target.value)}
+                              className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Lunch (₹)</label>
+                            <input
+                              type="number"
+                              value={editLunchPrice}
+                              onChange={(e) => setEditLunchPrice(e.target.value)}
+                              className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                              required
+                            />
+                          </div>
+                        </>
+                      )}
+                      {editTwoTimeCombo === 'breakfast_dinner' && (
+                        <>
+                          <div>
+                            <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Breakfast (₹)</label>
+                            <input
+                              type="number"
+                              value={editBreakfastPrice}
+                              onChange={(e) => setEditBreakfastPrice(e.target.value)}
+                              className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Dinner (₹)</label>
+                            <input
+                              type="number"
+                              value={editDinnerPrice}
+                              onChange={(e) => setEditDinnerPrice(e.target.value)}
+                              className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                              required
+                            />
+                          </div>
+                        </>
+                      )}
+                      {editTwoTimeCombo === 'lunch_dinner' && (
+                        <>
+                          <div>
+                            <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Lunch (₹)</label>
+                            <input
+                              type="number"
+                              value={editLunchPrice}
+                              onChange={(e) => setEditLunchPrice(e.target.value)}
+                              className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Dinner (₹)</label>
+                            <input
+                              type="number"
+                              value={editDinnerPrice}
+                              onChange={(e) => setEditDinnerPrice(e.target.value)}
+                              className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                              required
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {editPlan === '3_time' && (
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <div>
+                        <label className="block text-[10px] text-[#D4AF37] mb-1 font-semibold">Breakfast (₹)</label>
+                        <input
+                          type="number"
+                          value={editBreakfastPrice}
+                          onChange={(e) => setEditBreakfastPrice(e.target.value)}
+                          className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-[#D4AF37] mb-1 font-semibold">Lunch (₹)</label>
+                        <input
+                          type="number"
+                          value={editLunchPrice}
+                          onChange={(e) => setEditLunchPrice(e.target.value)}
+                          className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-[#D4AF37] mb-1 font-semibold">Dinner (₹)</label>
+                        <input
+                          type="number"
+                          value={editDinnerPrice}
+                          onChange={(e) => setEditDinnerPrice(e.target.value)}
+                          className="w-full px-2 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5]"
+                          required
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
                 <div>
-                  <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Total Amount (₹)</label>
+                  <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Total Amount (₹)</label>
                   <input
                     type="number"
                     value={editTotal}
@@ -608,7 +1028,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
               )}
 
               <div>
-                <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Travels (Optional)</label>
+                <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Travels / Description (Optional)</label>
                 <input
                   type="text"
                   value={editTravels}

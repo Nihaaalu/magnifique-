@@ -9,6 +9,8 @@ import {
   PartnerSettlementRow,
   PartnerSettlement,
   MealType,
+  MealPlan,
+  MealCombination,
   PaymentStatus,
   ExpenseCategory,
   SettlementType,
@@ -54,6 +56,11 @@ export async function fetchIncomeEntries(): Promise<IncomeRecord[]> {
       id,
       entry_date,
       income_type,
+      meal_plan,
+      meal_combination,
+      breakfast_price,
+      lunch_price,
+      dinner_price,
       meal_type,
       travel_name,
       member_count,
@@ -107,7 +114,53 @@ export async function fetchIncomeEntries(): Promise<IncomeRecord[]> {
       }
     }
 
-    // Map meal_type from db lowercase to capitalized UI
+    const isAlaCarte =
+      row.meal_plan === 'alacarte' ||
+      row.income_type === 'alacarte' ||
+      row.by_who === 'À LA CARTE';
+
+    let mealPlan: MealPlan = '1_time';
+    let mealCombination: MealCombination = 'breakfast';
+    let bPrice = row.breakfast_price != null ? Number(row.breakfast_price) : null;
+    let lPrice = row.lunch_price != null ? Number(row.lunch_price) : null;
+    let dPrice = row.dinner_price != null ? Number(row.dinner_price) : null;
+
+    if (row.meal_plan) {
+      mealPlan = row.meal_plan as MealPlan;
+      mealCombination = (row.meal_combination as MealCombination) ?? null;
+    } else if (isAlaCarte) {
+      mealPlan = 'alacarte';
+      mealCombination = null;
+    } else {
+      // Legacy records mapping
+      mealPlan = '1_time';
+      const mt = String(row.meal_type || 'breakfast').toLowerCase();
+      if (mt === 'lunch') {
+        mealCombination = 'lunch';
+        lPrice = Number(row.price_per_member) || 0;
+      } else if (mt === 'dinner') {
+        mealCombination = 'dinner';
+        dPrice = Number(row.price_per_member) || 0;
+      } else {
+        mealCombination = 'breakfast';
+        bPrice = Number(row.price_per_member) || 0;
+      }
+    }
+
+    // Calculated total price per member
+    let pricePerMember = 0;
+    if (!isAlaCarte) {
+      if (mealPlan === '1_time') {
+        pricePerMember = bPrice || lPrice || dPrice || Number(row.price_per_member) || 0;
+      } else {
+        pricePerMember = (bPrice || 0) + (lPrice || 0) + (dPrice || 0);
+        if (pricePerMember === 0 && row.price_per_member) {
+          pricePerMember = Number(row.price_per_member);
+        }
+      }
+    }
+
+    // Legacy meal_type for backward compatibility
     let mappedMealType: MealType | null = null;
     if (row.meal_type) {
       const mt = String(row.meal_type).toLowerCase();
@@ -120,12 +173,17 @@ export async function fetchIncomeEntries(): Promise<IncomeRecord[]> {
       id: String(row.id),
       date: row.entry_date,
       time: timeStr,
-      incomeType: row.income_type === 'alacarte' ? 'À La Carte' : 'Meal',
+      incomeType: isAlaCarte ? 'À La Carte' : 'Meal',
+      mealPlan,
+      mealCombination,
+      breakfastPrice: bPrice,
+      lunchPrice: lPrice,
+      dinnerPrice: dPrice,
       mealType: mappedMealType,
-      byWho: row.by_who || (row.income_type === 'alacarte' ? 'À LA CARTE' : 'IRSHAD'),
+      byWho: isAlaCarte ? 'À LA CARTE' : (row.by_who || 'IRSHAD'),
       travels: row.travel_name || undefined,
-      membersCount: Number(row.member_count) || 0,
-      pricePerMember: Number(row.price_per_member) || 0,
+      membersCount: isAlaCarte ? 0 : (Number(row.member_count) || 0),
+      pricePerMember,
       total: totalAmount,
       paymentStatus,
       amountPaid: amountReceived,
@@ -140,7 +198,7 @@ export async function fetchIncomeEntries(): Promise<IncomeRecord[]> {
 export async function createIncomeEntry(
   entry: Omit<IncomeEntryRow, 'id' | 'created_at' | 'updated_at'>
 ): Promise<any> {
-  const isAlaCarte = entry.income_type === 'À La Carte' || String(entry.income_type).toLowerCase() === 'alacarte';
+  const isAlaCarte = entry.meal_plan === 'alacarte' || entry.income_type === 'À La Carte' || String(entry.income_type).toLowerCase() === 'alacarte';
   const totalAmount = Number(entry.total_amount) || 0;
   const amountReceived = Number(entry.amount_received) || 0;
 
@@ -154,26 +212,37 @@ export async function createIncomeEntry(
     dbPaymentStatus = 'balance';
   }
 
-  // DB meal_type check constraint: 'breakfast' | 'lunch' | 'dinner'
-  let dbMealType: 'breakfast' | 'lunch' | 'dinner' = 'breakfast';
-  if (entry.meal_type) {
-    const mt = String(entry.meal_type).toLowerCase();
-    if (mt === 'lunch') dbMealType = 'lunch';
-    else if (mt === 'dinner') dbMealType = 'dinner';
+  // Calculate sum of meal prices
+  const bPrice = entry.breakfast_price != null ? Number(entry.breakfast_price) : null;
+  const lPrice = entry.lunch_price != null ? Number(entry.lunch_price) : null;
+  const dPrice = entry.dinner_price != null ? Number(entry.dinner_price) : null;
+  const sumPrices = (bPrice || 0) + (lPrice || 0) + (dPrice || 0);
+
+  // DB meal_type check constraint: 'breakfast' | 'lunch' | 'dinner' (or null for alacarte)
+  let dbMealType: 'breakfast' | 'lunch' | 'dinner' | null = null;
+  if (!isAlaCarte) {
+    if (entry.meal_combination === 'lunch') dbMealType = 'lunch';
+    else if (entry.meal_combination === 'dinner') dbMealType = 'dinner';
+    else if (entry.meal_combination === 'lunch_dinner') dbMealType = 'lunch';
     else dbMealType = 'breakfast';
   }
 
   const insertPayload: Record<string, any> = {
     entry_date: entry.entry_date,
     income_type: isAlaCarte ? 'alacarte' : 'meal',
+    meal_plan: entry.meal_plan,
+    meal_combination: isAlaCarte ? null : entry.meal_combination,
+    breakfast_price: isAlaCarte ? null : bPrice,
+    lunch_price: isAlaCarte ? null : lPrice,
+    dinner_price: isAlaCarte ? null : dPrice,
     meal_type: dbMealType,
     total_amount: totalAmount,
     amount_received: amountReceived,
     payment_status: dbPaymentStatus,
-    by_who: entry.by_who || (isAlaCarte ? 'À LA CARTE' : 'IRSHAD'),
+    by_who: isAlaCarte ? null : (entry.by_who || 'IRSHAD'),
     travel_name: entry.travel_name || null,
     member_count: isAlaCarte ? null : (Number(entry.member_count) || null),
-    price_per_member: isAlaCarte ? null : (Number(entry.price_per_member) || null),
+    price_per_member: isAlaCarte ? null : (sumPrices || null),
     balance_account_partner_id:
       dbPaymentStatus !== 'paid_full' && entry.balance_account_partner_id
         ? Number(entry.balance_account_partner_id) || entry.balance_account_partner_id
@@ -214,25 +283,55 @@ export async function updateIncomeEntry(
 
   if (entry.entry_date !== undefined) updatePayload.entry_date = entry.entry_date;
   if (entry.travel_name !== undefined) updatePayload.travel_name = entry.travel_name;
-  if (entry.by_who !== undefined) updatePayload.by_who = entry.by_who;
 
-  if (entry.income_type !== undefined) {
-    const isAlaCarte = entry.income_type === 'À La Carte' || String(entry.income_type).toLowerCase() === 'alacarte';
+  if (entry.meal_plan !== undefined) {
+    updatePayload.meal_plan = entry.meal_plan;
+  }
+  if (entry.meal_combination !== undefined) {
+    updatePayload.meal_combination = entry.meal_combination;
+  }
+  if (entry.breakfast_price !== undefined) {
+    updatePayload.breakfast_price = entry.breakfast_price != null ? Number(entry.breakfast_price) : null;
+  }
+  if (entry.lunch_price !== undefined) {
+    updatePayload.lunch_price = entry.lunch_price != null ? Number(entry.lunch_price) : null;
+  }
+  if (entry.dinner_price !== undefined) {
+    updatePayload.dinner_price = entry.dinner_price != null ? Number(entry.dinner_price) : null;
+  }
+
+  const isAlaCarte =
+    entry.meal_plan === 'alacarte' ||
+    entry.income_type === 'À La Carte' ||
+    String(entry.income_type).toLowerCase() === 'alacarte';
+
+  if (entry.income_type !== undefined || entry.meal_plan !== undefined) {
     updatePayload.income_type = isAlaCarte ? 'alacarte' : 'meal';
   }
 
-  if (entry.meal_type !== undefined && entry.meal_type !== null) {
-    const mt = String(entry.meal_type).toLowerCase();
-    if (mt === 'lunch') updatePayload.meal_type = 'lunch';
-    else if (mt === 'dinner') updatePayload.meal_type = 'dinner';
-    else updatePayload.meal_type = 'breakfast';
+  if (entry.by_who !== undefined) {
+    updatePayload.by_who = isAlaCarte ? null : entry.by_who;
+  }
+
+  if (entry.meal_type !== undefined || entry.meal_combination !== undefined) {
+    if (isAlaCarte) {
+      updatePayload.meal_type = null;
+    } else if (entry.meal_combination === 'lunch') {
+      updatePayload.meal_type = 'lunch';
+    } else if (entry.meal_combination === 'dinner') {
+      updatePayload.meal_type = 'dinner';
+    } else if (entry.meal_combination === 'lunch_dinner') {
+      updatePayload.meal_type = 'lunch';
+    } else {
+      updatePayload.meal_type = 'breakfast';
+    }
   }
 
   if (entry.member_count !== undefined) {
-    updatePayload.member_count = entry.member_count ? Number(entry.member_count) : null;
+    updatePayload.member_count = isAlaCarte ? null : (entry.member_count ? Number(entry.member_count) : null);
   }
   if (entry.price_per_member !== undefined) {
-    updatePayload.price_per_member = entry.price_per_member ? Number(entry.price_per_member) : null;
+    updatePayload.price_per_member = isAlaCarte ? null : (entry.price_per_member ? Number(entry.price_per_member) : null);
   }
 
   const newTotal =

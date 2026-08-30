@@ -4,9 +4,12 @@ import {
   formatCurrency,
   getTodayDateString,
   getCurrentMonthString,
-  formatDateDisplay,
 } from '../utils/formatters';
-import { Download, Calculator } from 'lucide-react';
+import {
+  generateDailyAccountsPdf,
+  generateMonthlyAccountsPdf,
+} from '../services/pdfReportGenerator';
+import { Download, Calculator, Loader2 } from 'lucide-react';
 
 interface AnalyticsTabProps {
   incomeRecords: IncomeRecord[];
@@ -19,140 +22,60 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
 }) => {
   const [profitShare, setProfitShare] = useState<ProfitShareResult | null>(null);
   const [downloadMsg, setDownloadMsg] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [generatingType, setGeneratingType] = useState<'today' | 'month' | null>(null);
 
   const todayStr = getTodayDateString();
   const currentMonthStr = getCurrentMonthString();
 
-  const triggerDownload = (filename: string, content: string, mimeType: string = 'text/plain;charset=utf-8') => {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  // 1. Download Today's Accounts as PDF
+  const handleDownloadToday = async () => {
+    if (generatingType) return;
+    setGeneratingType('today');
+    setDownloadError(null);
+    setDownloadMsg(null);
+
+    try {
+      // Yield to let React render the "Generating PDF..." state
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const doc = generateDailyAccountsPdf(todayStr, incomeRecords, expenseRecords);
+      const fileName = `MAGNIFIQUE_2.0_Daily_Accounts_${todayStr}.pdf`;
+      doc.save(fileName);
+
+      setDownloadMsg(`PDF downloaded successfully: ${fileName}`);
+      setTimeout(() => setDownloadMsg(null), 4000);
+    } catch (err: any) {
+      console.error('Failed to generate daily accounts PDF:', err);
+      setDownloadError(err.message || 'Failed to generate PDF report. Please try again.');
+    } finally {
+      setGeneratingType(null);
+    }
   };
 
-  // 1. Download Today's Accounts
-  const handleDownloadToday = () => {
-    const todayIncome = incomeRecords.filter((r) => r.date === todayStr);
-    const todayExpenses = expenseRecords.filter((r) => r.date === todayStr);
+  // 2. Download This Month's Accounts as PDF
+  const handleDownloadMonth = async () => {
+    if (generatingType) return;
+    setGeneratingType('month');
+    setDownloadError(null);
+    setDownloadMsg(null);
 
-    const totalTodayIncome = todayIncome.reduce((acc, r) => acc + r.total, 0);
-    const totalTodayPaidIncome = todayIncome.reduce((acc, r) => acc + r.amountPaid, 0);
-    const totalTodayBalanceIncome = todayIncome.reduce((acc, r) => acc + r.balance, 0);
-    const totalTodayExpense = todayExpenses.reduce((acc, r) => acc + r.amount, 0);
+    try {
+      // Yield to let React render the "Generating PDF..." state
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
-    let report = `=====================================================\n`;
-    report += `       MAGNIFIQUE 2.0 - DAILY ACCOUNTS REPORT        \n`;
-    report += `       Date: ${todayStr} (${formatDateDisplay(todayStr)}) \n`;
-    report += `=====================================================\n\n`;
+      const doc = generateMonthlyAccountsPdf(currentMonthStr, incomeRecords, expenseRecords);
+      const fileName = `MAGNIFIQUE_2.0_Monthly_Accounts_${currentMonthStr}.pdf`;
+      doc.save(fileName);
 
-    report += `--- 1. INCOME ENTRIES (Today: ${todayIncome.length} records) ---\n`;
-    if (todayIncome.length === 0) {
-      report += `No income entries recorded for today.\n\n`;
-    } else {
-      report += `Meal | By Who | Travels | Members | Price | Total | Status | Paid | Balance | Bal Account\n`;
-      report += `---------------------------------------------------------------------------------------\n`;
-      todayIncome.forEach((inc) => {
-        const isAlaCarte = inc.byWhoOption === 'À LA CARTE' || inc.byWho === 'À LA CARTE';
-        const membersDisplay = isAlaCarte ? '-' : inc.membersCount.toString();
-        const priceDisplay = isAlaCarte ? '-' : `₹${inc.pricePerMember}`;
-        report += `${inc.mealType} | ${inc.byWho} | ${inc.travels || '-'} | ${membersDisplay} | ${priceDisplay} | ₹${inc.total} | ${inc.paymentStatus} | ₹${inc.amountPaid} | ₹${inc.balance} | ${inc.balanceAccountByWho || '-'}\n`;
-      });
-      report += `---------------------------------------------------------------------------------------\n`;
-      report += `Total Today Income: ₹${totalTodayIncome}\n`;
-      report += `Total Received: ₹${totalTodayPaidIncome}\n`;
-      report += `Total Balance Due: ₹${totalTodayBalanceIncome}\n\n`;
+      setDownloadMsg(`PDF downloaded successfully: ${fileName}`);
+      setTimeout(() => setDownloadMsg(null), 4000);
+    } catch (err: any) {
+      console.error('Failed to generate monthly accounts PDF:', err);
+      setDownloadError(err.message || 'Failed to generate PDF report. Please try again.');
+    } finally {
+      setGeneratingType(null);
     }
-
-    report += `--- 2. EXPENSE ENTRIES (Today: ${todayExpenses.length} records) ---\n`;
-    if (todayExpenses.length === 0) {
-      report += `No expenses recorded for today.\n\n`;
-    } else {
-      report += `Category | Name / Description | Amount | Paid By\n`;
-      report += `----------------------------------------------------\n`;
-      todayExpenses.forEach((exp) => {
-        report += `${exp.category} | ${exp.name || '-'} | ₹${exp.amount} | ${exp.paidBy}\n`;
-      });
-      report += `----------------------------------------------------\n`;
-      report += `Total Today Expense: ₹${totalTodayExpense}\n\n`;
-    }
-
-    report += `=====================================================\n`;
-    report += `SUMMARY TODAY:\n`;
-    report += `Total Income : ₹${totalTodayIncome}\n`;
-    report += `Total Expense: ₹${totalTodayExpense}\n`;
-    report += `Net Amount   : ₹${totalTodayIncome - totalTodayExpense}\n`;
-    report += `=====================================================\n`;
-
-    const fileName = `MAGNIFIQUE_Accounts_Today_${todayStr}.txt`;
-    triggerDownload(fileName, report);
-
-    setDownloadMsg(`Downloaded ${fileName}`);
-    setTimeout(() => setDownloadMsg(null), 3000);
-  };
-
-  // 2. Download This Month's Accounts
-  const handleDownloadMonth = () => {
-    const monthIncome = incomeRecords.filter((r) => r.date.startsWith(currentMonthStr));
-    const monthExpenses = expenseRecords.filter((r) => r.date.startsWith(currentMonthStr));
-
-    const totalMonthIncome = monthIncome.reduce((acc, r) => acc + r.total, 0);
-    const totalMonthPaidIncome = monthIncome.reduce((acc, r) => acc + r.amountPaid, 0);
-    const totalMonthBalanceIncome = monthIncome.reduce((acc, r) => acc + r.balance, 0);
-    const totalMonthExpense = monthExpenses.reduce((acc, r) => acc + r.amount, 0);
-
-    let report = `=====================================================\n`;
-    report += `       MAGNIFIQUE 2.0 - MONTHLY ACCOUNTS REPORT      \n`;
-    report += `       Month: ${currentMonthStr}                     \n`;
-    report += `=====================================================\n\n`;
-
-    report += `--- 1. MONTHLY INCOME ENTRIES (${monthIncome.length} records) ---\n`;
-    if (monthIncome.length === 0) {
-      report += `No income entries recorded for this month.\n\n`;
-    } else {
-      report += `Date | Meal | By Who | Travels | Members | Price | Total | Status | Paid | Balance | Bal Account\n`;
-      report += `----------------------------------------------------------------------------------------------\n`;
-      monthIncome.forEach((inc) => {
-        const isAlaCarte = inc.byWhoOption === 'À LA CARTE' || inc.byWho === 'À LA CARTE';
-        const membersDisplay = isAlaCarte ? '-' : inc.membersCount.toString();
-        const priceDisplay = isAlaCarte ? '-' : `₹${inc.pricePerMember}`;
-        report += `${inc.date} | ${inc.mealType} | ${inc.byWho} | ${inc.travels || '-'} | ${membersDisplay} | ${priceDisplay} | ₹${inc.total} | ${inc.paymentStatus} | ₹${inc.amountPaid} | ₹${inc.balance} | ${inc.balanceAccountByWho || '-'}\n`;
-      });
-      report += `----------------------------------------------------------------------------------------------\n`;
-      report += `Total Monthly Income: ₹${totalMonthIncome}\n`;
-      report += `Total Monthly Received: ₹${totalMonthPaidIncome}\n`;
-      report += `Total Monthly Balance Due: ₹${totalMonthBalanceIncome}\n\n`;
-    }
-
-    report += `--- 2. MONTHLY EXPENSE ENTRIES (${monthExpenses.length} records) ---\n`;
-    if (monthExpenses.length === 0) {
-      report += `No expenses recorded for this month.\n\n`;
-    } else {
-      report += `Date | Category | Name / Description | Amount | Paid By\n`;
-      report += `-----------------------------------------------------------\n`;
-      monthExpenses.forEach((exp) => {
-        report += `${exp.date} | ${exp.category} | ${exp.name || '-'} | ₹${exp.amount} | ${exp.paidBy}\n`;
-      });
-      report += `-----------------------------------------------------------\n`;
-      report += `Total Monthly Expense: ₹${totalMonthExpense}\n\n`;
-    }
-
-    report += `=====================================================\n`;
-    report += `SUMMARY THIS MONTH (${currentMonthStr}):\n`;
-    report += `Total Income : ₹${totalMonthIncome}\n`;
-    report += `Total Expense: ₹${totalMonthExpense}\n`;
-    report += `Net Amount   : ₹${totalMonthIncome - totalMonthExpense}\n`;
-    report += `=====================================================\n`;
-
-    const fileName = `MAGNIFIQUE_Accounts_Month_${currentMonthStr}.txt`;
-    triggerDownload(fileName, report);
-
-    setDownloadMsg(`Downloaded ${fileName}`);
-    setTimeout(() => setDownloadMsg(null), 3000);
   };
 
   // Profit Sharing Calculation
@@ -187,13 +110,37 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
 
   return (
     <div id="analytics-tab-container">
-      {/* Feedback Alert */}
+      {/* Feedback Alert - Success */}
       {downloadMsg && (
         <div
           id="analytics-download-feedback"
-          className="mb-4 p-2.5 bg-[#171717] border border-[#D4AF37]/40 text-[#D4AF37] rounded-md text-xs font-semibold"
+          className="mb-4 p-2.5 bg-[#171717] border border-[#D4AF37]/50 text-[#D4AF37] rounded-md text-xs font-semibold flex items-center justify-between"
         >
-          {downloadMsg}
+          <span>{downloadMsg}</span>
+          <button
+            type="button"
+            onClick={() => setDownloadMsg(null)}
+            className="text-[#B8B8B8] hover:text-[#F5F5F5] text-xs cursor-pointer ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Feedback Alert - Error */}
+      {downloadError && (
+        <div
+          id="analytics-download-error"
+          className="mb-4 p-2.5 bg-[#201212] border border-[#3d1d1d] text-[#f87171] rounded-md text-xs font-semibold flex items-center justify-between"
+        >
+          <span>{downloadError}</span>
+          <button
+            type="button"
+            onClick={() => setDownloadError(null)}
+            className="text-[#f87171] hover:text-[#ffffff] text-xs cursor-pointer ml-2"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -210,7 +157,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             </h2>
           </div>
           <span className="text-[11px] font-bold text-[#D4AF37] bg-[#171717] px-2 py-0.5 rounded border border-[#2A2A2A]">
-            Export Data
+            PDF Export
           </span>
         </div>
 
@@ -220,7 +167,10 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             type="button"
             id="btn-download-today"
             onClick={handleDownloadToday}
-            className="w-full flex items-center justify-between p-3.5 rounded-lg border border-[#2A2A2A] bg-[#111111] hover:border-[#D4AF37]/50 hover:bg-[#1D1D1D] text-[#F5F5F5] transition-all cursor-pointer min-h-[48px] group"
+            disabled={generatingType !== null}
+            className={`w-full flex items-center justify-between p-3.5 rounded-lg border border-[#2A2A2A] bg-[#111111] hover:border-[#D4AF37]/50 hover:bg-[#1D1D1D] text-[#F5F5F5] transition-all cursor-pointer min-h-[48px] group ${
+              generatingType === 'today' ? 'opacity-80' : ''
+            }`}
           >
             <div className="text-left">
               <span className="text-xs font-bold block text-[#F5F5F5] group-hover:text-[#F2C94C] transition-colors">
@@ -229,8 +179,17 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               <span className="text-[11px] text-[#777777] font-medium">{todayStr}</span>
             </div>
             <div className="flex items-center gap-1.5 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] px-2.5 py-1.5 rounded-md font-black text-xs shadow-xs group-hover:bg-[#F2C94C] transition-all shrink-0">
-              <Download className="w-3.5 h-3.5" />
-              <span>Download</span>
+              {generatingType === 'today' ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Generating PDF...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </>
+              )}
             </div>
           </button>
 
@@ -238,7 +197,10 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             type="button"
             id="btn-download-month"
             onClick={handleDownloadMonth}
-            className="w-full flex items-center justify-between p-3.5 rounded-lg border border-[#2A2A2A] bg-[#111111] hover:border-[#D4AF37]/50 hover:bg-[#1D1D1D] text-[#F5F5F5] transition-all cursor-pointer min-h-[48px] group"
+            disabled={generatingType !== null}
+            className={`w-full flex items-center justify-between p-3.5 rounded-lg border border-[#2A2A2A] bg-[#111111] hover:border-[#D4AF37]/50 hover:bg-[#1D1D1D] text-[#F5F5F5] transition-all cursor-pointer min-h-[48px] group ${
+              generatingType === 'month' ? 'opacity-80' : ''
+            }`}
           >
             <div className="text-left">
               <span className="text-xs font-bold block text-[#F5F5F5] group-hover:text-[#F2C94C] transition-colors">
@@ -247,8 +209,17 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               <span className="text-[11px] text-[#777777] font-medium">Month: {currentMonthStr}</span>
             </div>
             <div className="flex items-center gap-1.5 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] px-2.5 py-1.5 rounded-md font-black text-xs shadow-xs group-hover:bg-[#F2C94C] transition-all shrink-0">
-              <Download className="w-3.5 h-3.5" />
-              <span>Download</span>
+              {generatingType === 'month' ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Generating PDF...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </>
+              )}
             </div>
           </button>
         </div>

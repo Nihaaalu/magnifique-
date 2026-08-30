@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
-  MealType,
+  MealPlan,
+  MealCombination,
   PaymentStatus,
   IncomeRecord,
   ExpenseRecord,
@@ -23,6 +24,9 @@ interface IncomeTabProps {
   isLoading?: boolean;
 }
 
+type OneTimeMeal = 'breakfast' | 'lunch' | 'dinner';
+type TwoTimeCombo = 'breakfast_lunch' | 'breakfast_dinner' | 'lunch_dinner';
+
 export const IncomeTab: React.FC<IncomeTabProps> = ({
   incomeRecords,
   expenseRecords,
@@ -30,23 +34,36 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   onAddIncome,
   onDeleteIncome,
   onUpdateIncome,
-  isLoading,
 }) => {
-  const [selectedMeal, setSelectedMeal] = useState<MealType>('Breakfast');
+  // Primary Selection: 1 TIME | 2 TIME | 3 TIME | À LA CARTE
+  const [selectedPlan, setSelectedPlan] = useState<MealPlan>('1_time');
+
+  // Secondary Selection for 1 TIME: 'breakfast' | 'lunch' | 'dinner'
+  const [oneTimeMeal, setOneTimeMeal] = useState<OneTimeMeal>('breakfast');
+
+  // Secondary Selection for 2 TIME: 'breakfast_lunch' | 'breakfast_dinner' | 'lunch_dinner'
+  const [twoTimeCombo, setTwoTimeCombo] = useState<TwoTimeCombo>('breakfast_lunch');
 
   // Form State
   const defaultByWho = partners[0]?.name?.toUpperCase() || 'IRSHAD';
   const [byWhoOption, setByWhoOption] = useState<string>(defaultByWho);
   const [customByWho, setCustomByWho] = useState<string>('');
   const [travels, setTravels] = useState<string>('');
+  const [entryDate, setEntryDate] = useState<string>(getTodayDateString());
+
+  // Meal inputs
   const [membersCount, setMembersCount] = useState<string>('');
-  const [pricePerMember, setPricePerMember] = useState<string>('');
+  const [breakfastPrice, setBreakfastPrice] = useState<string>('');
+  const [lunchPrice, setLunchPrice] = useState<string>('');
+  const [dinnerPrice, setDinnerPrice] = useState<string>('');
+
+  // À LA CARTE manual total
   const [manualTotalAmount, setManualTotalAmount] = useState<string>('');
+
+  // Payment Status
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('Paid Full');
   const [amountPaid, setAmountPaid] = useState<string>('');
   const [balanceAccountPartnerId, setBalanceAccountPartnerId] = useState<string>(partners[0]?.id || '');
-  const [customBalanceAccount, setCustomBalanceAccount] = useState<string>('');
-  const [entryDate, setEntryDate] = useState<string>(getTodayDateString());
 
   // Feedback & Loading State
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
@@ -55,17 +72,40 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
   // Dynamic Options from Supabase partners
   const partnerNamesUpper = partners.map((p) => p.name.toUpperCase());
-  const byWhoOptions = [...partnerNamesUpper, 'À LA CARTE', 'Other'];
+  const byWhoOptions = [...partnerNamesUpper, 'Other'];
 
-  // À LA CARTE Mode
-  const isAlaCarte = byWhoOption === 'À LA CARTE';
+  const isAlaCarte = selectedPlan === 'alacarte';
 
-  // Calculated values
+  // Numerical values
   const countNum = Math.max(0, parseInt(membersCount, 10) || 0);
-  const priceNum = Math.max(0, parseFloat(pricePerMember) || 0);
-  const calculatedMealTotal = countNum * priceNum;
+  const bPriceNum = Math.max(0, parseFloat(breakfastPrice) || 0);
+  const lPriceNum = Math.max(0, parseFloat(lunchPrice) || 0);
+  const dPriceNum = Math.max(0, parseFloat(dinnerPrice) || 0);
   const manualTotalNum = Math.max(0, parseFloat(manualTotalAmount) || 0);
-  const totalCalculated = isAlaCarte ? manualTotalNum : calculatedMealTotal;
+
+  // Calculate live total based on plan & combination
+  let totalCalculated = 0;
+  if (isAlaCarte) {
+    totalCalculated = manualTotalNum;
+  } else if (selectedPlan === '1_time') {
+    if (oneTimeMeal === 'breakfast') {
+      totalCalculated = countNum * bPriceNum;
+    } else if (oneTimeMeal === 'lunch') {
+      totalCalculated = countNum * lPriceNum;
+    } else {
+      totalCalculated = countNum * dPriceNum;
+    }
+  } else if (selectedPlan === '2_time') {
+    if (twoTimeCombo === 'breakfast_lunch') {
+      totalCalculated = countNum * (bPriceNum + lPriceNum);
+    } else if (twoTimeCombo === 'breakfast_dinner') {
+      totalCalculated = countNum * (bPriceNum + dPriceNum);
+    } else {
+      totalCalculated = countNum * (lPriceNum + dPriceNum);
+    }
+  } else if (selectedPlan === '3_time') {
+    totalCalculated = countNum * (bPriceNum + lPriceNum + dPriceNum);
+  }
 
   // Amount Paid & Balance calculation
   let finalPaid = 0;
@@ -88,13 +128,41 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     setCustomByWho('');
     setTravels('');
     setMembersCount('');
-    setPricePerMember('');
+    setBreakfastPrice('');
+    setLunchPrice('');
+    setDinnerPrice('');
     setManualTotalAmount('');
     setPaymentStatus('Paid Full');
     setAmountPaid('');
     setBalanceAccountPartnerId(partners[0]?.id || '');
-    setCustomBalanceAccount('');
     setValidationError(null);
+  };
+
+  const getPlanBadgeLabel = () => {
+    if (isAlaCarte) return 'À LA CARTE';
+    if (selectedPlan === '1_time') {
+      return `1 TIME • ${oneTimeMeal.toUpperCase()}`;
+    }
+    if (selectedPlan === '2_time') {
+      if (twoTimeCombo === 'breakfast_lunch') return '2 TIME • B + L';
+      if (twoTimeCombo === 'breakfast_dinner') return '2 TIME • B + D';
+      return '2 TIME • L + D';
+    }
+    return '3 TIME • B + L + D';
+  };
+
+  const getSaveButtonLabel = () => {
+    if (isSubmitting) return 'SAVING TO SUPABASE...';
+    if (isAlaCarte) return 'SAVE À LA CARTE';
+    if (selectedPlan === '1_time') {
+      return `SAVE 1 TIME (${oneTimeMeal.toUpperCase()})`;
+    }
+    if (selectedPlan === '2_time') {
+      if (twoTimeCombo === 'breakfast_lunch') return 'SAVE 2 TIME (BREAKFAST + LUNCH)';
+      if (twoTimeCombo === 'breakfast_dinner') return 'SAVE 2 TIME (BREAKFAST + DINNER)';
+      return 'SAVE 2 TIME (LUNCH + DINNER)';
+    }
+    return 'SAVE 3 TIME (BREAKFAST + LUNCH + DINNER)';
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -118,9 +186,41 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         return;
       }
 
-      if (priceNum <= 0) {
-        setValidationError('Price per member must be greater than 0.');
-        return;
+      if (selectedPlan === '1_time') {
+        if (oneTimeMeal === 'breakfast' && bPriceNum <= 0) {
+          setValidationError('Please enter a valid Breakfast price per member.');
+          return;
+        }
+        if (oneTimeMeal === 'lunch' && lPriceNum <= 0) {
+          setValidationError('Please enter a valid Lunch price per member.');
+          return;
+        }
+        if (oneTimeMeal === 'dinner' && dPriceNum <= 0) {
+          setValidationError('Please enter a valid Dinner price per member.');
+          return;
+        }
+      } else if (selectedPlan === '2_time') {
+        if (twoTimeCombo === 'breakfast_lunch') {
+          if (bPriceNum <= 0 || lPriceNum <= 0) {
+            setValidationError('Please enter valid prices for both Breakfast and Lunch.');
+            return;
+          }
+        } else if (twoTimeCombo === 'breakfast_dinner') {
+          if (bPriceNum <= 0 || dPriceNum <= 0) {
+            setValidationError('Please enter valid prices for both Breakfast and Dinner.');
+            return;
+          }
+        } else if (twoTimeCombo === 'lunch_dinner') {
+          if (lPriceNum <= 0 || dPriceNum <= 0) {
+            setValidationError('Please enter valid prices for both Lunch and Dinner.');
+            return;
+          }
+        }
+      } else if (selectedPlan === '3_time') {
+        if (bPriceNum <= 0 || lPriceNum <= 0 || dPriceNum <= 0) {
+          setValidationError('Please enter valid prices for Breakfast, Lunch, and Dinner.');
+          return;
+        }
       }
     }
 
@@ -137,7 +237,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     }
 
     const resolvedByWho = isAlaCarte
-      ? 'À LA CARTE'
+      ? null
       : byWhoOption === 'Other'
       ? customByWho.trim().toUpperCase()
       : byWhoOption;
@@ -147,18 +247,52 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
       partnerIdForBalance = balanceAccountPartnerId || partners[0]?.id || null;
     }
 
-    const dbPaymentStatus: 'Paid Full' | 'Balance' =
-      paymentStatus === 'Paid Full' ? 'Paid Full' : 'Balance';
+    // Determine meal_combination and prices to store
+    let mealComboToStore: MealCombination = null;
+    let bPriceToStore: number | null = null;
+    let lPriceToStore: number | null = null;
+    let dPriceToStore: number | null = null;
+
+    if (!isAlaCarte) {
+      if (selectedPlan === '1_time') {
+        mealComboToStore = oneTimeMeal;
+        if (oneTimeMeal === 'breakfast') bPriceToStore = bPriceNum;
+        if (oneTimeMeal === 'lunch') lPriceToStore = lPriceNum;
+        if (oneTimeMeal === 'dinner') dPriceToStore = dPriceNum;
+      } else if (selectedPlan === '2_time') {
+        mealComboToStore = twoTimeCombo;
+        if (twoTimeCombo === 'breakfast_lunch') {
+          bPriceToStore = bPriceNum;
+          lPriceToStore = lPriceNum;
+        } else if (twoTimeCombo === 'breakfast_dinner') {
+          bPriceToStore = bPriceNum;
+          dPriceToStore = dPriceNum;
+        } else if (twoTimeCombo === 'lunch_dinner') {
+          lPriceToStore = lPriceNum;
+          dPriceToStore = dPriceNum;
+        }
+      } else if (selectedPlan === '3_time') {
+        mealComboToStore = 'all';
+        bPriceToStore = bPriceNum;
+        lPriceToStore = lPriceNum;
+        dPriceToStore = dPriceNum;
+      }
+    }
+
+    const dbPaymentStatus = paymentStatus === 'Paid Full' ? 'paid_full' : paymentStatus === 'Paid Partially' ? 'paid_partial' : 'balance';
 
     setIsSubmitting(true);
     try {
       await onAddIncome({
         entry_date: entryDate || getTodayDateString(),
-        income_type: isAlaCarte ? 'À La Carte' : 'Meal',
-        meal_type: isAlaCarte ? null : selectedMeal,
+        income_type: isAlaCarte ? 'alacarte' : 'meal',
+        meal_plan: selectedPlan,
+        meal_combination: mealComboToStore,
+        breakfast_price: bPriceToStore,
+        lunch_price: lPriceToStore,
+        dinner_price: dPriceToStore,
         travel_name: travels.trim() || null,
         member_count: isAlaCarte ? null : countNum,
-        price_per_member: isAlaCarte ? null : priceNum,
         total_amount: totalCalculated,
         amount_received: finalPaid,
         balance_amount: finalBalance,
@@ -167,8 +301,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         balance_account_partner_id: partnerIdForBalance,
       });
 
-      const feedbackLabel = isAlaCarte ? 'À LA CARTE' : selectedMeal;
-      setFeedbackMsg(`Saved ${feedbackLabel} income (${formatCurrency(totalCalculated)}) to Supabase`);
+      setFeedbackMsg(`Saved ${getPlanBadgeLabel()} (${formatCurrency(totalCalculated)}) to Supabase`);
       handleResetForm();
 
       setTimeout(() => {
@@ -214,36 +347,122 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
             </h2>
           </div>
           <span className="text-[11px] font-bold text-[#D4AF37] bg-[#171717] px-2 py-0.5 rounded border border-[#2A2A2A]">
-            {isAlaCarte ? 'À LA CARTE' : selectedMeal}
+            {getPlanBadgeLabel()}
           </span>
         </div>
 
-        {/* Meal Selector: Breakfast / Lunch / Dinner */}
-        <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]" id="meal-selector-buttons">
-          {(['Breakfast', 'Lunch', 'Dinner'] as MealType[]).map((meal) => {
-            const isSelected = !isAlaCarte && selectedMeal === meal;
+        {/* PRIMARY INCOME TYPE CHOICES: 1 TIME | 2 TIME | 3 TIME | À LA CARTE */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]" id="meal-plan-primary-selector">
+          {(
+            [
+              { id: '1_time', label: '1 TIME' },
+              { id: '2_time', label: '2 TIME' },
+              { id: '3_time', label: '3 TIME' },
+              { id: 'alacarte', label: 'À LA CARTE' },
+            ] as { id: MealPlan; label: string }[]
+          ).map((plan) => {
+            const isSelected = selectedPlan === plan.id;
             return (
               <button
-                key={meal}
+                key={plan.id}
                 type="button"
-                id={`meal-btn-${meal.toLowerCase()}`}
+                id={`plan-btn-${plan.id}`}
                 onClick={() => {
-                  setSelectedMeal(meal);
-                  if (isAlaCarte) {
-                    setByWhoOption(partners[0]?.name?.toUpperCase() || 'IRSHAD');
-                  }
+                  setSelectedPlan(plan.id);
+                  setValidationError(null);
                 }}
-                className={`py-2 px-2 text-xs font-bold rounded-md transition-all cursor-pointer text-center min-h-[42px] uppercase tracking-wide ${
+                className={`py-2 px-1 text-xs font-bold rounded-md transition-all cursor-pointer text-center min-h-[42px] tracking-wide uppercase ${
                   isSelected
                     ? 'bg-[#D4AF37] text-[#0A0A0A] font-black shadow-xs'
-                    : 'bg-[#171717] text-[#B8B8B8] hover:bg-[#1D1D1D] hover:text-[#F5F5F5] border border-[#2A2A2A] font-semibold'
+                    : 'bg-[#171717] text-[#B8B8B8] hover:bg-[#1D1D1D] hover:text-[#F5F5F5] border border-[#2A2A2A]'
                 }`}
               >
-                {meal}
+                {plan.label}
               </button>
             );
           })}
         </div>
+
+        {/* SECONDARY SELECTIONS */}
+        {/* 1 TIME SECONDARY SELECTION: [ Breakfast ] [ Lunch ] [ Dinner ] */}
+        {selectedPlan === '1_time' && (
+          <div className="space-y-1">
+            <label className="block text-[11px] font-semibold text-[#D4AF37]">
+              Select Meal
+            </label>
+            <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]" id="one-time-subselector">
+              {(
+                [
+                  { id: 'breakfast', label: 'Breakfast' },
+                  { id: 'lunch', label: 'Lunch' },
+                  { id: 'dinner', label: 'Dinner' },
+                ] as { id: OneTimeMeal; label: string }[]
+              ).map((meal) => {
+                const isSelected = oneTimeMeal === meal.id;
+                return (
+                  <button
+                    key={meal.id}
+                    type="button"
+                    id={`one-time-btn-${meal.id}`}
+                    onClick={() => setOneTimeMeal(meal.id)}
+                    className={`py-2 px-1 text-xs font-bold rounded-md transition-all cursor-pointer text-center min-h-[38px] uppercase tracking-wide ${
+                      isSelected
+                        ? 'bg-[#F2C94C] text-[#0A0A0A] font-black shadow-xs'
+                        : 'bg-[#171717] text-[#B8B8B8] hover:bg-[#1D1D1D] hover:text-[#F5F5F5] border border-[#2A2A2A]'
+                    }`}
+                  >
+                    {meal.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 2 TIME SECONDARY SELECTION: [ Breakfast + Lunch ] [ Breakfast + Dinner ] [ Lunch + Dinner ] */}
+        {selectedPlan === '2_time' && (
+          <div className="space-y-1">
+            <label className="block text-[11px] font-semibold text-[#D4AF37]">
+              Select Meal Combination
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]" id="two-time-subselector">
+              {(
+                [
+                  { id: 'breakfast_lunch', label: 'Breakfast + Lunch' },
+                  { id: 'breakfast_dinner', label: 'Breakfast + Dinner' },
+                  { id: 'lunch_dinner', label: 'Lunch + Dinner' },
+                ] as { id: TwoTimeCombo; label: string }[]
+              ).map((combo) => {
+                const isSelected = twoTimeCombo === combo.id;
+                return (
+                  <button
+                    key={combo.id}
+                    type="button"
+                    id={`two-time-btn-${combo.id}`}
+                    onClick={() => setTwoTimeCombo(combo.id)}
+                    className={`py-2 px-2 text-xs font-bold rounded-md transition-all cursor-pointer text-center min-h-[38px] tracking-wide ${
+                      isSelected
+                        ? 'bg-[#F2C94C] text-[#0A0A0A] font-black shadow-xs'
+                        : 'bg-[#171717] text-[#B8B8B8] hover:bg-[#1D1D1D] hover:text-[#F5F5F5] border border-[#2A2A2A]'
+                    }`}
+                  >
+                    {combo.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 3 TIME CONFIRMATION BADGE */}
+        {selectedPlan === '3_time' && (
+          <div className="p-2 bg-[#111111] border border-[#D4AF37]/30 rounded-lg flex items-center justify-between text-xs" id="three-time-confirmation">
+            <span className="text-[#D0D0D0] font-medium">Included Meals:</span>
+            <span className="font-bold text-[#D4AF37] tracking-wide">
+              Breakfast + Lunch + Dinner (All 3 Meals)
+            </span>
+          </div>
+        )}
 
         {/* Form Container */}
         <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md">
@@ -257,139 +476,403 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
               </div>
             )}
 
-            {/* Date & By Who */}
-            <div className="grid grid-cols-2 gap-2.5">
-              <div>
-                <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
-                  Date
-                </label>
-                <input
-                  type="date"
-                  id="income-date-input"
-                  value={entryDate}
-                  onChange={(e) => setEntryDate(e.target.value)}
-                  className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
-                  By Who
-                </label>
-                <select
-                  id="income-by-who-select"
-                  value={byWhoOption}
-                  onChange={(e) => setByWhoOption(e.target.value)}
-                  className="w-full px-2 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                >
-                  {byWhoOptions.map((opt) => (
-                    <option key={opt} value={opt} className="bg-[#171717] text-[#F5F5F5]">
-                      {opt}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Custom By Who (if Other and not À LA CARTE) */}
-            {!isAlaCarte && byWhoOption === 'Other' && (
-              <div>
-                <input
-                  type="text"
-                  id="income-custom-by-who"
-                  placeholder="Enter person name"
-                  value={customByWho}
-                  onChange={(e) => setCustomByWho(e.target.value)}
-                  className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37]"
-                  required
-                />
-              </div>
-            )}
-
-            {/* Travels (Optional) */}
-            <div>
-              <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
-                Travels <span className="text-[#777777] font-normal">(optional)</span>
-              </label>
-              <input
-                type="text"
-                id="income-travels-input"
-                placeholder="e.g. Royal Travels"
-                value={travels}
-                onChange={(e) => setTravels(e.target.value)}
-                className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
-              />
-            </div>
-
-            {/* Dynamic Fields: Either À LA CARTE Total Amount OR Normal Members & Price */}
+            {/* ==================================================
+                À LA CARTE FORM (COMPLETELY CHANGED: NO BY WHO, NO MEMBERS, NO MEAL PRICES)
+                ================================================== */}
             {isAlaCarte ? (
-              <div>
-                <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
-                  Total Amount (₹)
-                </label>
-                <input
-                  type="number"
-                  id="income-total-amount-input"
-                  min="1"
-                  step="any"
-                  placeholder="2500"
-                  value={manualTotalAmount}
-                  onChange={(e) => setManualTotalAmount(e.target.value)}
-                  className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F2C94C] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                  required
-                />
-              </div>
-            ) : (
-              <>
-                {/* Members Count & Price */}
-                <div className="grid grid-cols-2 gap-2.5">
+              <div className="space-y-3.5" id="alacarte-form-fields">
+                {/* Date & Travels */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div>
                     <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
-                      Members
+                      Date
                     </label>
                     <input
-                      type="number"
-                      id="income-members-count"
-                      min="1"
-                      step="1"
-                      placeholder="150"
-                      value={membersCount}
-                      onChange={(e) => setMembersCount(e.target.value)}
-                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      type="date"
+                      id="income-date-input"
+                      value={entryDate}
+                      onChange={(e) => setEntryDate(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
                       required
                     />
                   </div>
 
                   <div>
                     <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
-                      Price / Member (₹)
+                      Travels / Description <span className="text-[#777777] font-normal">(optional)</span>
                     </label>
                     <input
-                      type="number"
-                      id="income-price-per-member"
-                      min="0"
-                      step="any"
-                      placeholder="90"
-                      value={pricePerMember}
-                      onChange={(e) => setPricePerMember(e.target.value)}
-                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                      required
+                      type="text"
+                      id="income-travels-input"
+                      placeholder="e.g. À La Carte Table 4 / Party"
+                      value={travels}
+                      onChange={(e) => setTravels(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
                     />
                   </div>
                 </div>
 
-                {/* Total Display for Normal Meal */}
+                {/* Total Amount (Entered directly by user) */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                    TOTAL AMOUNT (₹)
+                  </label>
+                  <input
+                    type="number"
+                    id="income-total-amount-input"
+                    min="1"
+                    step="any"
+                    placeholder="Enter total amount (e.g. 2500)"
+                    value={manualTotalAmount}
+                    onChange={(e) => setManualTotalAmount(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-[#111111] border border-[#D4AF37]/50 rounded-md text-sm font-bold text-[#F2C94C] placeholder-[#777777] min-h-[42px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    required
+                  />
+                </div>
+              </div>
+            ) : (
+              /* ==================================================
+                 1 TIME / 2 TIME / 3 TIME FORM
+                 ================================================== */
+              <div className="space-y-3.5" id="meal-plan-form-fields">
+                {/* Date & By Who */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                      Date
+                    </label>
+                    <input
+                      type="date"
+                      id="income-date-input"
+                      value={entryDate}
+                      onChange={(e) => setEntryDate(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                      By Who
+                    </label>
+                    <select
+                      id="income-by-who-select"
+                      value={byWhoOption}
+                      onChange={(e) => setByWhoOption(e.target.value)}
+                      className="w-full px-2 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    >
+                      {byWhoOptions.map((opt) => (
+                        <option key={opt} value={opt} className="bg-[#171717] text-[#F5F5F5]">
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Custom By Who (if Other) */}
+                {byWhoOption === 'Other' && (
+                  <div>
+                    <input
+                      type="text"
+                      id="income-custom-by-who"
+                      placeholder="Enter person name"
+                      value={customByWho}
+                      onChange={(e) => setCustomByWho(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37]"
+                      required
+                    />
+                  </div>
+                )}
+
+                {/* Travels (Optional) */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                    Travels <span className="text-[#777777] font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="income-travels-input"
+                    placeholder="e.g. Royal Travels"
+                    value={travels}
+                    onChange={(e) => setTravels(e.target.value)}
+                    className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                  />
+                </div>
+
+                {/* Members Count Input */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                    Members Count (PAX)
+                  </label>
+                  <input
+                    type="number"
+                    id="income-members-count"
+                    min="1"
+                    step="1"
+                    placeholder="e.g. 150"
+                    value={membersCount}
+                    onChange={(e) => setMembersCount(e.target.value)}
+                    className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    required
+                  />
+                </div>
+
+                {/* DYNAMIC MEAL PRICE INPUTS ACCORDING TO SELECTED PLAN & COMBO */}
+                {/* 1 TIME PRICE INPUT */}
+                {selectedPlan === '1_time' && (
+                  <div>
+                    {oneTimeMeal === 'breakfast' && (
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                          Breakfast Price / Member (₹)
+                        </label>
+                        <input
+                          type="number"
+                          id="income-breakfast-price"
+                          min="0"
+                          step="any"
+                          placeholder="e.g. 90"
+                          value={breakfastPrice}
+                          onChange={(e) => setBreakfastPrice(e.target.value)}
+                          className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                          required
+                        />
+                      </div>
+                    )}
+                    {oneTimeMeal === 'lunch' && (
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                          Lunch Price / Member (₹)
+                        </label>
+                        <input
+                          type="number"
+                          id="income-lunch-price"
+                          min="0"
+                          step="any"
+                          placeholder="e.g. 120"
+                          value={lunchPrice}
+                          onChange={(e) => setLunchPrice(e.target.value)}
+                          className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                          required
+                        />
+                      </div>
+                    )}
+                    {oneTimeMeal === 'dinner' && (
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                          Dinner Price / Member (₹)
+                        </label>
+                        <input
+                          type="number"
+                          id="income-dinner-price"
+                          min="0"
+                          step="any"
+                          placeholder="e.g. 100"
+                          value={dinnerPrice}
+                          onChange={(e) => setDinnerPrice(e.target.value)}
+                          className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                          required
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 2 TIME PRICE INPUTS: ONLY THE TWO REQUIRED MEAL PRICES */}
+                {selectedPlan === '2_time' && (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {twoTimeCombo === 'breakfast_lunch' && (
+                      <>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                            Breakfast Price (₹)
+                          </label>
+                          <input
+                            type="number"
+                            id="income-breakfast-price"
+                            min="0"
+                            step="any"
+                            placeholder="e.g. 90"
+                            value={breakfastPrice}
+                            onChange={(e) => setBreakfastPrice(e.target.value)}
+                            className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                            Lunch Price (₹)
+                          </label>
+                          <input
+                            type="number"
+                            id="income-lunch-price"
+                            min="0"
+                            step="any"
+                            placeholder="e.g. 120"
+                            value={lunchPrice}
+                            onChange={(e) => setLunchPrice(e.target.value)}
+                            className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {twoTimeCombo === 'breakfast_dinner' && (
+                      <>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                            Breakfast Price (₹)
+                          </label>
+                          <input
+                            type="number"
+                            id="income-breakfast-price"
+                            min="0"
+                            step="any"
+                            placeholder="e.g. 90"
+                            value={breakfastPrice}
+                            onChange={(e) => setBreakfastPrice(e.target.value)}
+                            className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                            Dinner Price (₹)
+                          </label>
+                          <input
+                            type="number"
+                            id="income-dinner-price"
+                            min="0"
+                            step="any"
+                            placeholder="e.g. 100"
+                            value={dinnerPrice}
+                            onChange={(e) => setDinnerPrice(e.target.value)}
+                            className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {twoTimeCombo === 'lunch_dinner' && (
+                      <>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                            Lunch Price (₹)
+                          </label>
+                          <input
+                            type="number"
+                            id="income-lunch-price"
+                            min="0"
+                            step="any"
+                            placeholder="e.g. 120"
+                            value={lunchPrice}
+                            onChange={(e) => setLunchPrice(e.target.value)}
+                            className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                            Dinner Price (₹)
+                          </label>
+                          <input
+                            type="number"
+                            id="income-dinner-price"
+                            min="0"
+                            step="any"
+                            placeholder="e.g. 100"
+                            value={dinnerPrice}
+                            onChange={(e) => setDinnerPrice(e.target.value)}
+                            className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* 3 TIME PRICE INPUTS: ALL 3 MEALS */}
+                {selectedPlan === '3_time' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                        Breakfast Price (₹)
+                      </label>
+                      <input
+                        type="number"
+                        id="income-breakfast-price"
+                        min="0"
+                        step="any"
+                        placeholder="e.g. 90"
+                        value={breakfastPrice}
+                        onChange={(e) => setBreakfastPrice(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                        Lunch Price (₹)
+                      </label>
+                      <input
+                        type="number"
+                        id="income-lunch-price"
+                        min="0"
+                        step="any"
+                        placeholder="e.g. 120"
+                        value={lunchPrice}
+                        onChange={(e) => setLunchPrice(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                        Dinner Price (₹)
+                      </label>
+                      <input
+                        type="number"
+                        id="income-dinner-price"
+                        min="0"
+                        step="any"
+                        placeholder="e.g. 100"
+                        value={dinnerPrice}
+                        onChange={(e) => setDinnerPrice(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                        required
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Real-time Calculated Total Amount Display */}
                 <div className="flex items-center justify-between p-3 bg-[#111111] border border-[#D4AF37]/40 rounded-lg">
-                  <span className="text-xs font-bold text-[#B8B8B8]">TOTAL AMOUNT</span>
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold text-[#B8B8B8]">TOTAL AMOUNT</span>
+                    <span className="text-[10px] text-[#777777]">
+                      {countNum} PAX × ₹{(
+                        selectedPlan === '1_time'
+                          ? (oneTimeMeal === 'breakfast' ? bPriceNum : oneTimeMeal === 'lunch' ? lPriceNum : dPriceNum)
+                          : selectedPlan === '2_time'
+                          ? (twoTimeCombo === 'breakfast_lunch' ? bPriceNum + lPriceNum : twoTimeCombo === 'breakfast_dinner' ? bPriceNum + dPriceNum : lPriceNum + dPriceNum)
+                          : bPriceNum + lPriceNum + dPriceNum
+                      ).toFixed(0)}
+                    </span>
+                  </div>
                   <span id="income-calculated-total" className="text-base sm:text-lg font-black text-[#F2C94C]">
                     {formatCurrency(totalCalculated)}
                   </span>
                 </div>
-              </>
+              </div>
             )}
 
-            {/* Payment Status: Segmented Options with Clean Dark/Gold States */}
+            {/* ==================================================
+                PAYMENT STATUS (Common for all plans)
+                ================================================== */}
             <div className="space-y-1.5 pt-1">
               <label className="block text-[11px] font-semibold text-[#D0D0D0]">
                 Payment Status
@@ -512,11 +995,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                 disabled={isSubmitting}
                 className="flex-1 py-2.5 px-4 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] rounded-lg text-xs sm:text-sm font-black tracking-wider uppercase transition-all shadow-xs cursor-pointer min-h-[44px] text-center disabled:opacity-50"
               >
-                {isSubmitting
-                  ? 'SAVING TO SUPABASE...'
-                  : isAlaCarte
-                  ? 'SAVE À LA CARTE'
-                  : `SAVE ${selectedMeal}`}
+                {getSaveButtonLabel()}
               </button>
             </div>
           </form>
