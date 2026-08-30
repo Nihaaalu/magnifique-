@@ -1,18 +1,13 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { IncomeRecord, ExpenseRecord } from '../types';
-import {
-  LIBERATION_SANS_REGULAR_BASE64,
-  LIBERATION_SANS_BOLD_BASE64,
-  LIBERATION_SANS_ITALIC_BASE64,
-  LIBERATION_SANS_BOLD_ITALIC_BASE64,
-} from '../utils/pdfFonts';
 
-// Format currency as ₹ 1,25,000
+// Format currency as Rs. 1,25,000
 export const formatPdfCurrency = (amount: number): string => {
   const num = Math.round(amount) || 0;
-  return `₹ ${num.toLocaleString('en-IN')}`;
+  return `Rs. ${num.toLocaleString('en-IN')}`;
 };
+
 
 // Format Date YYYY-MM-DD to DD Month YYYY (e.g. 30 August 2026)
 export const formatPdfDate = (dateStr: string): string => {
@@ -59,30 +54,7 @@ export const formatPdfMonth = (monthStr: string): string => {
   });
 };
 
-// Register custom unicode font into jsPDF instance
-const setupPdfFonts = (doc: jsPDF) => {
-  try {
-    if (LIBERATION_SANS_REGULAR_BASE64 && LIBERATION_SANS_BOLD_BASE64) {
-      doc.addFileToVFS('LiberationSans-Regular.ttf', LIBERATION_SANS_REGULAR_BASE64);
-      doc.addFont('LiberationSans-Regular.ttf', 'LiberationSans', 'normal');
-      doc.addFileToVFS('LiberationSans-Bold.ttf', LIBERATION_SANS_BOLD_BASE64);
-      doc.addFont('LiberationSans-Bold.ttf', 'LiberationSans', 'bold');
-      if (LIBERATION_SANS_ITALIC_BASE64) {
-        doc.addFileToVFS('LiberationSans-Italic.ttf', LIBERATION_SANS_ITALIC_BASE64);
-        doc.addFont('LiberationSans-Italic.ttf', 'LiberationSans', 'italic');
-      }
-      if (LIBERATION_SANS_BOLD_ITALIC_BASE64) {
-        doc.addFileToVFS('LiberationSans-BoldItalic.ttf', LIBERATION_SANS_BOLD_ITALIC_BASE64);
-        doc.addFont('LiberationSans-BoldItalic.ttf', 'LiberationSans', 'bolditalic');
-      }
-      doc.setFont('LiberationSans', 'normal');
-      return 'LiberationSans';
-    }
-  } catch (err) {
-    console.warn('Could not register custom font in jsPDF, falling back to standard font', err);
-  }
-  return 'helvetica';
-};
+const PDF_FONT = 'helvetica';
 
 // Add Header and Footer on each page
 const drawPageHeaderAndFooter = (
@@ -197,7 +169,7 @@ const formatIncomeCell = (inc: IncomeRecord): string => {
     const partnerName = (inc.balanceAccountPartnerName || inc.balanceAccountPartnerId || '').trim();
     balanceLine = `Balance: ${formatPdfCurrency(balanceAmount)}${partnerName ? ` (${partnerName})` : ''}`;
   } else {
-    balanceLine = 'Balance: ₹ 0';
+    balanceLine = 'Balance: Rs. 0';
   }
 
   // 4. PAID
@@ -281,7 +253,7 @@ export const generateDailyAccountsPdf = (
     format: 'a4',
   });
 
-  const fontFamily = setupPdfFonts(doc);
+  const fontFamily = PDF_FONT;
   const pageWidth = doc.internal.pageSize.getWidth(); // ~841.89 pt
   const pageHeight = doc.internal.pageSize.getHeight(); // ~595.28 pt
   const leftMargin = 36;
@@ -512,7 +484,7 @@ export const generateMonthlyAccountsPdf = (
     format: 'a4',
   });
 
-  const fontFamily = setupPdfFonts(doc);
+  const fontFamily = PDF_FONT;
   const pageWidth = doc.internal.pageSize.getWidth(); // ~841.89 pt
   const pageHeight = doc.internal.pageSize.getHeight(); // ~595.28 pt
   const leftMargin = 36;
