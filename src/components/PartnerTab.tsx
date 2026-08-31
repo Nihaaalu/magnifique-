@@ -55,6 +55,17 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
     };
   };
 
+  // Filter out any partner not in the official 5, and ONLY keep partners with balanceToHotel > 0 or expensesByThem > 0
+  const validPartners = partners.filter((p) => p.name.toUpperCase() !== 'LOKESH');
+
+  const displayedPartners = validPartners.filter((partner) => {
+    const { balanceToHotel, expensesByThem } = getBalancesForPartner(
+      partner.id,
+      partner.name
+    );
+    return balanceToHotel > 0 || expensesByThem > 0;
+  });
+
   const handleOpenSettlement = (
     partner: Partner,
     type: SettlementType,
@@ -141,7 +152,7 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
           </h2>
         </div>
         <span className="text-[11px] font-bold text-[#D4AF37] bg-[#171717] px-2 py-0.5 rounded border border-[#2A2A2A]">
-          {partners.length} Partners
+          {displayedPartners.length} Active Partners
         </span>
       </div>
 
@@ -165,22 +176,24 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
         </div>
       )}
 
-      {/* List of Partners loaded dynamically from Supabase */}
+      {/* List of Active Partners (balance > 0 or expense > 0) */}
       <div
         className="bg-[#171717] rounded-xl border border-[#2A2A2A] shadow-md overflow-hidden"
         id="partner-list"
       >
-        {partners.length === 0 ? (
+        {displayedPartners.length === 0 ? (
           <div className="py-8 text-center text-[#777777] text-xs font-medium">
-            {isLoading ? 'Loading partners from Supabase...' : 'No partners found.'}
+            {isLoading
+              ? 'Loading partners from Supabase...'
+              : 'No active partner balances or expenses to display.'}
           </div>
         ) : (
-          partners.map((partner, index) => {
+          displayedPartners.map((partner, index) => {
             const { balanceToHotel, expensesByThem } = getBalancesForPartner(
               partner.id,
               partner.name
             );
-            const isNotLast = index < partners.length - 1;
+            const isNotLast = index < displayedPartners.length - 1;
 
             return (
               <React.Fragment key={partner.id}>

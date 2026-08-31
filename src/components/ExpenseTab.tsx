@@ -212,14 +212,14 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
               </div>
             </div>
 
-            {/* Name / Description */}
+            {/* Description */}
             <div>
               <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
-                Name / Description <span className="text-[#777777] font-normal">(optional)</span>
+                Description <span className="text-[#777777] font-normal">(optional)</span>
               </label>
               <input
                 type="text"
-                id="expense-name-input"
+                id="expense-description-input"
                 placeholder={getPlaceholderForCategory(category)}
                 value={name}
                 onChange={(e) => setName(e.target.value)}

@@ -6,8 +6,10 @@ import {
   Partner,
   PartnerCurrentBalance,
   PartnerSettlementRow,
+  PartnerSettlement,
   IncomeEntryRow,
   ExpenseEntryRow,
+  AccountMonthRow,
 } from './types';
 import {
   fetchPartners,
@@ -22,26 +24,66 @@ import {
   fetchPartnerCurrentBalances,
   fetchPartnerSettlements,
   createPartnerSettlement,
+  fetchAccountMonths,
+  getOrCreateAccountMonth,
+  closeAccountMonthInDb,
+  reopenAccountMonthInDb,
+  getAppLockStatus,
 } from './services/supabaseService';
+import { getCurrentMonthString } from './utils/formatters';
+import { calculateAllMonthsSummary } from './utils/accountBalanceUtils';
 import { Navbar } from './components/Navbar';
 import { IncomeTab } from './components/IncomeTab';
 import { ExpenseTab } from './components/ExpenseTab';
 import { PartnerTab } from './components/PartnerTab';
 import { AnalyticsTab } from './components/AnalyticsTab';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { AppLockScreen } from './components/AppLockScreen';
+import { AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('income');
+
+  // Application Lock State (InMemory only for current active session)
+  const [isLocked, setIsLocked] = useState<boolean>(true);
+  const [isCheckingLock, setIsCheckingLock] = useState<boolean>(true);
 
   // Supabase State
   const [partners, setPartners] = useState<Partner[]>([]);
   const [incomeRecords, setIncomeRecords] = useState<IncomeRecord[]>([]);
   const [expenseRecords, setExpenseRecords] = useState<ExpenseRecord[]>([]);
   const [partnerBalances, setPartnerBalances] = useState<PartnerCurrentBalance[]>([]);
-  const [partnerSettlements, setPartnerSettlements] = useState<PartnerSettlementRow[]>([]);
+  const [partnerSettlements, setPartnerSettlements] = useState<PartnerSettlement[]>([]);
+  const [accountMonths, setAccountMonths] = useState<AccountMonthRow[]>([]);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Check initial app lock status from Supabase
+  useEffect(() => {
+    let isMounted = true;
+    async function checkLock() {
+      try {
+        const lockEnabled = await getAppLockStatus();
+        if (isMounted) {
+          setIsLocked(lockEnabled);
+        }
+      } catch (err) {
+        console.error('Failed to check app lock status:', err);
+        if (isMounted) {
+          setIsLocked(true);
+        }
+      } finally {
+        if (isMounted) {
+          setIsCheckingLock(false);
+        }
+      }
+    }
+
+    checkLock();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Load all initial data from Supabase PostgreSQL
   const loadData = useCallback(async () => {
@@ -54,12 +96,14 @@ export default function App() {
         expenseData,
         balancesData,
         settlementsData,
+        monthsData,
       ] = await Promise.all([
         fetchPartners(),
         fetchIncomeEntries(),
         fetchExpenseEntries(),
         fetchPartnerCurrentBalances(),
         fetchPartnerSettlements(),
+        fetchAccountMonths(),
       ]);
 
       setPartners(partnersData);
@@ -67,6 +111,30 @@ export default function App() {
       setExpenseRecords(expenseData);
       setPartnerBalances(balancesData);
       setPartnerSettlements(settlementsData);
+      setAccountMonths(monthsData);
+
+      // Ensure current month exists in account_months
+      const curMonth = getCurrentMonthString();
+      const exists = monthsData.some((m) => m.month_start && m.month_start.startsWith(curMonth));
+      if (!exists) {
+        // Calculate initial opening balance for current month based on previous months
+        const calculatedSummaries = calculateAllMonthsSummary(
+          incomeData,
+          expenseData,
+          monthsData,
+          settlementsData
+        );
+        const curSummary = calculatedSummaries[curMonth];
+        const initialOpening = curSummary ? curSummary.openingBalance : 0;
+        getOrCreateAccountMonth(curMonth, initialOpening).then((newMonth) => {
+          setAccountMonths((prev) => {
+            if (prev.some((m) => m.month_start && m.month_start.startsWith(curMonth))) {
+              return prev;
+            }
+            return [...prev, newMonth];
+          });
+        }).catch((e) => console.warn('Could not auto-create account_month in DB:', e));
+      }
     } catch (err: any) {
       console.error('Failed to load data from Supabase:', err);
       setError(
@@ -203,6 +271,52 @@ export default function App() {
     setPartnerBalances(updatedBalances);
   };
 
+  // Month Close / Reopen Operations
+  const handleCloseMonth = async (monthStr: string, closingBalance: number) => {
+    await closeAccountMonthInDb(monthStr, closingBalance);
+    const updatedMonths = await fetchAccountMonths();
+    setAccountMonths(updatedMonths);
+  };
+
+  const handleReopenMonth = async (monthStr: string) => {
+    await reopenAccountMonthInDb(monthStr);
+    const updatedMonths = await fetchAccountMonths();
+    setAccountMonths(updatedMonths);
+  };
+
+  const handleUnlock = () => {
+    setIsLocked(false);
+  };
+
+  const handleLockApp = () => {
+    setIsLocked(true);
+  };
+
+  // If checking initial lock status, display clean dark splash loader
+  if (isCheckingLock) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0A] flex flex-col items-center justify-center space-y-3 text-[#F5F5F5]">
+        <div className="text-center space-y-1">
+          <h1 className="text-xl font-black text-[#F5F5F5] tracking-widest uppercase">
+            MAGNIFIQUE <span className="text-[#D4AF37]">2.0</span>
+          </h1>
+          <p className="text-xs text-[#777777] font-medium tracking-wide">
+            Restaurant Accounts
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-[#D4AF37] pt-2">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // If locked, render the full application lock screen before showing the main application
+  if (isLocked) {
+    return <AppLockScreen onUnlock={handleUnlock} />;
+  }
+
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] flex flex-col font-sans selection:bg-[#D4AF37] selection:text-[#0A0A0A]">
       {/* Mobile-First Header with 4-Tab Navigation */}
@@ -273,6 +387,11 @@ export default function App() {
           <AnalyticsTab
             incomeRecords={incomeRecords}
             expenseRecords={expenseRecords}
+            accountMonths={accountMonths}
+            partnerSettlements={partnerSettlements}
+            onCloseMonth={handleCloseMonth}
+            onReopenMonth={handleReopenMonth}
+            onLockApp={handleLockApp}
           />
         )}
       </main>
@@ -288,3 +407,4 @@ export default function App() {
     </div>
   );
 }
+

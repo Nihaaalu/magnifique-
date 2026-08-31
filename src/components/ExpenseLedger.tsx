@@ -530,7 +530,7 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Name / Description</label>
+                <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Description</label>
                 <input
                   type="text"
                   value={editName}

@@ -127,13 +127,31 @@ export interface PartnerSettlement {
   created_at?: string;
 }
 
+export interface AccountMonthRow {
+  id?: string;
+  month_start: string; // 'YYYY-MM-01' or 'YYYY-MM'
+  opening_balance: number;
+  total_income: number;
+  total_paid: number;
+  total_balance: number;
+  total_expense: number;
+  settlement_to_hotel: number;
+  settlement_from_hotel: number;
+  closing_balance: number;
+  is_closed: boolean;
+  closed_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ProfitShareResult {
   totalIncome: number;
   totalExpense: number;
   profit: number;
   ansariIrshadShare: number; // 25% combined
-  mussaddiqShare: number; // 25%
+  mussaddiqShare: number; // 25% (MUSADDIQ)
   sathishShare: number; // 25%
   yogeshShare: number; // 25%
   generatedAt: string;
 }
+

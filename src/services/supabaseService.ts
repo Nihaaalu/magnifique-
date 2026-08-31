@@ -8,6 +8,7 @@ import {
   ExpenseRecord,
   PartnerSettlementRow,
   PartnerSettlement,
+  AccountMonthRow,
   MealType,
   MealPlan,
   MealCombination,
@@ -20,6 +21,16 @@ import {
  * Supabase Data Access Layer
  * Provides clean typed operations matching the Supabase PostgreSQL database schema.
  */
+
+// EXACT 5 Official Partners (Never use LOKESH)
+export const OFFICIAL_PARTNER_NAMES = ['ANSARI', 'IRSHAD', 'MUSADDIQ', 'SATHISH', 'YOGESH'] as const;
+
+export function normalizePartnerName(name: string): string {
+  const upper = (name || '').trim().toUpperCase();
+  if (upper === 'MUSSADDIQ' || upper === 'MUSADDIQ') return 'MUSADDIQ';
+  return upper;
+}
+
 
 // ==========================================
 // 1. PARTNERS
@@ -542,21 +553,102 @@ export async function deleteExpenseEntry(id: string): Promise<void> {
 // 4. PARTNER BALANCES (VIEW) & SETTLEMENTS
 // ==========================================
 export async function fetchPartnerCurrentBalances(): Promise<PartnerCurrentBalance[]> {
-  const { data, error } = await supabase
-    .from('partner_current_balances')
-    .select('partner_id, name, balance_to_hotel, expenses_by_them');
+  // Query partners, view data, and settlements independently to guarantee accuracy
+  const [partnersRes, viewRes, settlementsRes, incomeRes, expenseRes] = await Promise.all([
+    supabase.from('partners').select('id, name').order('name'),
+    supabase.from('partner_current_balances').select('*'),
+    supabase.from('partner_settlements').select('*'),
+    supabase.from('income_entries').select('balance_amount, balance_account_partner_id, by_who, payment_status'),
+    supabase.from('expense_entries').select('amount, paid_by, paid_by_partner_id'),
+  ]);
 
-  if (error) {
-    console.warn('Could not query partner_current_balances view directly:', error);
-    throw new Error(`Failed to load partner current balances: ${error.message}`);
-  }
+  const rawPartners = partnersRes.data || [];
+  const rawViewBalances = viewRes.data || [];
+  const rawSettlements = settlementsRes.data || [];
+  const rawIncome = incomeRes.data || [];
+  const rawExpense = expenseRes.data || [];
 
-  return (data || []).map((row: any) => ({
-    partner_id: String(row.partner_id),
-    name: row.name,
-    balance_to_hotel: Number(row.balance_to_hotel) || 0,
-    expenses_by_them: Number(row.expenses_by_them) || 0,
-  }));
+  // Filter out any partner named LOKESH and focus strictly on the 5 official partners
+  const result: PartnerCurrentBalance[] = OFFICIAL_PARTNER_NAMES.map((officialName) => {
+    // Find matching partner record from 'partners' table (match ANSARI, IRSHAD, MUSADDIQ/MUSSADDIQ, SATHISH, YOGESH)
+    const matchingPartner = rawPartners.find(
+      (p) => normalizePartnerName(p.name) === officialName
+    );
+    const partnerId = matchingPartner ? String(matchingPartner.id) : officialName;
+    const partnerName = officialName;
+
+    // 1. Initial / view balances for this partner
+    const viewRow = rawViewBalances.find(
+      (v: any) =>
+        (matchingPartner && String(v.partner_id) === String(matchingPartner.id)) ||
+        normalizePartnerName(v.name) === officialName
+    );
+
+    let baseBalanceToHotel = viewRow ? Number(viewRow.balance_to_hotel) || 0 : 0;
+    let baseExpensesByThem = viewRow ? Number(viewRow.expenses_by_them) || 0 : 0;
+
+    // Also sum from income entries if not represented in view
+    const incomeBalanceSum = rawIncome.reduce((acc: number, inc: any) => {
+      const bal = Number(inc.balance_amount) || 0;
+      if (bal <= 0) return acc;
+      const isMatchId = matchingPartner && String(inc.balance_account_partner_id) === String(matchingPartner.id);
+      const isMatchName = normalizePartnerName(inc.by_who || '') === officialName;
+      if (isMatchId || isMatchName) {
+        return acc + bal;
+      }
+      return acc;
+    }, 0);
+
+    const expensePaidSum = rawExpense.reduce((acc: number, exp: any) => {
+      const amt = Number(exp.amount) || 0;
+      if (amt <= 0) return acc;
+      const isMatchId = matchingPartner && String(exp.paid_by_partner_id) === String(matchingPartner.id);
+      const isMatchName = normalizePartnerName(exp.paid_by || '') === officialName;
+      if (isMatchId || isMatchName) {
+        return acc + amt;
+      }
+      return acc;
+    }, 0);
+
+    // Use highest of view or direct entry sum
+    const totalBalanceToHotel = Math.max(baseBalanceToHotel, incomeBalanceSum);
+    const totalExpensesByThem = Math.max(baseExpensesByThem, expensePaidSum);
+
+    // 2. Sum settlements for this partner
+    const partnerSettlements = rawSettlements.filter((s: any) => {
+      if (matchingPartner && String(s.partner_id) === String(matchingPartner.id)) return true;
+      return false;
+    });
+
+    const settlementsToHotel = partnerSettlements.reduce((sum: number, s: any) => {
+      const type = String(s.settlement_type).toLowerCase();
+      if (type === 'to_hotel' || type === 'balance_to_hotel') {
+        return sum + (Number(s.amount) || 0);
+      }
+      return sum;
+    }, 0);
+
+    const settlementsFromHotel = partnerSettlements.reduce((sum: number, s: any) => {
+      const type = String(s.settlement_type).toLowerCase();
+      if (type === 'from_hotel' || type === 'expenses_by_them') {
+        return sum + (Number(s.amount) || 0);
+      }
+      return sum;
+    }, 0);
+
+    // 3. Current net balances (never negative)
+    const netBalanceToHotel = Math.max(0, totalBalanceToHotel - settlementsToHotel);
+    const netExpensesByThem = Math.max(0, totalExpensesByThem - settlementsFromHotel);
+
+    return {
+      partner_id: partnerId,
+      name: partnerName,
+      balance_to_hotel: netBalanceToHotel,
+      expenses_by_them: netExpensesByThem,
+    };
+  });
+
+  return result;
 }
 
 export async function fetchPartnerSettlements(): Promise<PartnerSettlement[]> {
@@ -633,3 +725,291 @@ export async function createPartnerSettlement(
 
   return data;
 }
+
+// ==========================================
+// 5. ACCOUNT MONTHS (Persistent Monthly Accounting)
+// ==========================================
+export async function fetchAccountMonths(): Promise<AccountMonthRow[]> {
+  const { data, error } = await supabase
+    .from('account_months')
+    .select('*')
+    .order('month_start', { ascending: true });
+
+  if (error) {
+    console.warn('Error querying account_months table from Supabase:', error);
+    return [];
+  }
+
+  return (data || []).map((row: any) => ({
+    id: row.id ? String(row.id) : undefined,
+    month_start: String(row.month_start),
+    opening_balance: Number(row.opening_balance) || 0,
+    total_income: Number(row.total_income) || 0,
+    total_paid: Number(row.total_paid) || 0,
+    total_balance: Number(row.total_balance) || 0,
+    total_expense: Number(row.total_expense) || 0,
+    settlement_to_hotel: Number(row.settlement_to_hotel) || 0,
+    settlement_from_hotel: Number(row.settlement_from_hotel) || 0,
+    closing_balance: Number(row.closing_balance) || 0,
+    is_closed: !!row.is_closed,
+    closed_at: row.closed_at || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+}
+
+/**
+ * Standardize month string to YYYY-MM-01 format for database queries
+ */
+export function formatMonthStartDb(monthStr: string): string {
+  if (!monthStr) return '2026-08-01';
+  if (monthStr.length === 7) return `${monthStr}-01`;
+  if (monthStr.length >= 10) return `${monthStr.substring(0, 7)}-01`;
+  return monthStr;
+}
+
+/**
+ * Get or create an account month record in Supabase without overwriting existing opening_balance.
+ */
+export async function getOrCreateAccountMonth(
+  monthKey: string, // e.g. '2026-08' or '2026-08-01'
+  calculatedOpeningBalance: number
+): Promise<AccountMonthRow> {
+  const dbMonthStart = formatMonthStartDb(monthKey);
+  const monthPrefix = monthKey.substring(0, 7);
+
+  // Check if row already exists
+  const { data: existingRows, error: fetchErr } = await supabase
+    .from('account_months')
+    .select('*');
+
+  if (!fetchErr && existingRows && existingRows.length > 0) {
+    const found = existingRows.find(
+      (r: any) => String(r.month_start).startsWith(monthPrefix) || String(r.month_start) === dbMonthStart
+    );
+    if (found) {
+      return {
+        id: found.id ? String(found.id) : undefined,
+        month_start: String(found.month_start),
+        opening_balance: Number(found.opening_balance) || 0,
+        total_income: Number(found.total_income) || 0,
+        total_paid: Number(found.total_paid) || 0,
+        total_balance: Number(found.total_balance) || 0,
+        total_expense: Number(found.total_expense) || 0,
+        settlement_to_hotel: Number(found.settlement_to_hotel) || 0,
+        settlement_from_hotel: Number(found.settlement_from_hotel) || 0,
+        closing_balance: Number(found.closing_balance) || 0,
+        is_closed: !!found.is_closed,
+        closed_at: found.closed_at || null,
+        created_at: found.created_at,
+        updated_at: found.updated_at,
+      };
+    }
+  }
+
+  // Row does not exist -> Create new row with initial opening balance
+  const insertPayload = {
+    month_start: dbMonthStart,
+    opening_balance: Number(calculatedOpeningBalance) || 0,
+    total_income: 0,
+    total_paid: 0,
+    total_balance: 0,
+    total_expense: 0,
+    settlement_to_hotel: 0,
+    settlement_from_hotel: 0,
+    closing_balance: Number(calculatedOpeningBalance) || 0,
+    is_closed: false,
+  };
+
+  const { data, error } = await supabase
+    .from('account_months')
+    .insert(insertPayload)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error inserting new account_month into Supabase:', error);
+    // Return fallback object if insert failed
+    return {
+      month_start: dbMonthStart,
+      opening_balance: calculatedOpeningBalance,
+      total_income: 0,
+      total_paid: 0,
+      total_balance: 0,
+      total_expense: 0,
+      settlement_to_hotel: 0,
+      settlement_from_hotel: 0,
+      closing_balance: calculatedOpeningBalance,
+      is_closed: false,
+    };
+  }
+
+  return {
+    id: data.id ? String(data.id) : undefined,
+    month_start: String(data.month_start),
+    opening_balance: Number(data.opening_balance) || 0,
+    total_income: Number(data.total_income) || 0,
+    total_paid: Number(data.total_paid) || 0,
+    total_balance: Number(data.total_balance) || 0,
+    total_expense: Number(data.total_expense) || 0,
+    settlement_to_hotel: Number(data.settlement_to_hotel) || 0,
+    settlement_from_hotel: Number(data.settlement_from_hotel) || 0,
+    closing_balance: Number(data.closing_balance) || 0,
+    is_closed: !!data.is_closed,
+    closed_at: data.closed_at || null,
+    created_at: data.created_at,
+    updated_at: data.updated_at,
+  };
+}
+
+/**
+ * Update monthly totals in account_months table
+ */
+export async function updateAccountMonthTotals(
+  monthKey: string,
+  totals: {
+    total_income: number;
+    total_paid: number;
+    total_balance: number;
+    total_expense: number;
+    settlement_to_hotel: number;
+    settlement_from_hotel: number;
+    closing_balance: number;
+    opening_balance?: number;
+  }
+): Promise<void> {
+  const dbMonthStart = formatMonthStartDb(monthKey);
+  const monthPrefix = monthKey.substring(0, 7);
+
+  const updatePayload: Record<string, any> = {
+    total_income: totals.total_income,
+    total_paid: totals.total_paid,
+    total_balance: totals.total_balance,
+    total_expense: totals.total_expense,
+    settlement_to_hotel: totals.settlement_to_hotel,
+    settlement_from_hotel: totals.settlement_from_hotel,
+    closing_balance: totals.closing_balance,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (totals.opening_balance !== undefined) {
+    updatePayload.opening_balance = totals.opening_balance;
+  }
+
+  const { error } = await supabase
+    .from('account_months')
+    .update(updatePayload)
+    .or(`month_start.eq.${dbMonthStart},month_start.like.${monthPrefix}%`);
+
+  if (error) {
+    console.warn('Error updating account_months totals in Supabase:', error);
+  }
+}
+
+/**
+ * Explicitly close a month in account_months
+ */
+export async function closeAccountMonthInDb(
+  monthKey: string,
+  closingBalance: number
+): Promise<void> {
+  const dbMonthStart = formatMonthStartDb(monthKey);
+  const monthPrefix = monthKey.substring(0, 7);
+
+  const updatePayload = {
+    is_closed: true,
+    closing_balance: Number(closingBalance) || 0,
+    closed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from('account_months')
+    .update(updatePayload)
+    .or(`month_start.eq.${dbMonthStart},month_start.like.${monthPrefix}%`);
+
+  if (error) {
+    console.error('Error closing account month in Supabase:', error);
+    throw new Error(`Failed to close month: ${error.message}`);
+  }
+}
+
+/**
+ * Re-open a month in account_months
+ */
+export async function reopenAccountMonthInDb(monthKey: string): Promise<void> {
+  const dbMonthStart = formatMonthStartDb(monthKey);
+  const monthPrefix = monthKey.substring(0, 7);
+
+  const updatePayload = {
+    is_closed: false,
+    closed_at: null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from('account_months')
+    .update(updatePayload)
+    .or(`month_start.eq.${dbMonthStart},month_start.like.${monthPrefix}%`);
+
+  if (error) {
+    console.error('Error reopening account month in Supabase:', error);
+    throw new Error(`Failed to reopen month: ${error.message}`);
+  }
+}
+
+// ==========================================
+// 8. APPLICATION LOCK (SUPABASE RPC)
+// ==========================================
+
+/**
+ * Check if the application lock is enabled in Supabase
+ */
+export async function getAppLockStatus(): Promise<boolean> {
+  const { data, error } = await supabase.rpc('get_app_lock_status');
+
+  if (error) {
+    console.error('Error fetching app lock status from Supabase:', error);
+    // Default to true if error occurs to maintain security
+    return true;
+  }
+
+  return Boolean(data);
+}
+
+/**
+ * Securely verify PIN using Supabase RPC
+ */
+export async function verifyAppPin(inputPin: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('verify_app_pin', {
+    input_pin: inputPin,
+  });
+
+  if (error) {
+    console.error('Error verifying app PIN:', error);
+    throw new Error(error.message || 'Failed to verify PIN');
+  }
+
+  return Boolean(data);
+}
+
+/**
+ * Change PIN securely using Supabase RPC
+ */
+export async function changeAppPin(
+  currentPin: string,
+  newPin: string
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc('change_app_pin', {
+    current_pin: currentPin,
+    new_pin: newPin,
+  });
+
+  if (error) {
+    console.error('Error changing app PIN:', error);
+    throw new Error(error.message || 'Failed to change PIN');
+  }
+
+  return Boolean(data);
+}
+
