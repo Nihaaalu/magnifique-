@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   MealPlan,
   MealCombination,
@@ -45,8 +45,8 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const [twoTimeCombo, setTwoTimeCombo] = useState<TwoTimeCombo>('breakfast_lunch');
 
   // Form State
-  const defaultByWho = partners[0]?.name?.toUpperCase() || 'IRSHAD';
-  const [byWhoOption, setByWhoOption] = useState<string>(defaultByWho);
+  const defaultPartner = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
+  const [byWhoOption, setByWhoOption] = useState<string>(defaultPartner?.name?.toUpperCase() || 'IRSHAD');
   const [customByWho, setCustomByWho] = useState<string>('');
   const [travels, setTravels] = useState<string>('');
   const [entryDate, setEntryDate] = useState<string>(getTodayDateString());
@@ -63,7 +63,33 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   // Payment Status
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('Paid Full');
   const [amountPaid, setAmountPaid] = useState<string>('');
-  const [balanceAccountPartnerId, setBalanceAccountPartnerId] = useState<string>(partners[0]?.id || '');
+  const [balanceAccountPartnerId, setBalanceAccountPartnerId] = useState<string>(defaultPartner?.id || '');
+
+  // Synchronize default balance partner on initial partners load if not set
+  useEffect(() => {
+    if (partners.length > 0 && !balanceAccountPartnerId) {
+      const irshad = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
+      if (irshad) {
+        setBalanceAccountPartnerId(irshad.id);
+      }
+    }
+  }, [partners, balanceAccountPartnerId]);
+
+  // Handle By Who change and update default Balance Account Partner
+  const handleByWhoChange = (newByWho: string) => {
+    setByWhoOption(newByWho);
+    if (newByWho === 'Other') {
+      const irshad = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
+      if (irshad) {
+        setBalanceAccountPartnerId(irshad.id);
+      }
+    } else {
+      const matched = partners.find((p) => p.name.toUpperCase() === newByWho.toUpperCase());
+      if (matched) {
+        setBalanceAccountPartnerId(matched.id);
+      }
+    }
+  };
 
   // Feedback & Loading State
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
@@ -124,7 +150,8 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   }
 
   const handleResetForm = () => {
-    setByWhoOption(partners[0]?.name?.toUpperCase() || 'IRSHAD');
+    const irshad = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
+    setByWhoOption(irshad?.name?.toUpperCase() || 'IRSHAD');
     setCustomByWho('');
     setTravels('');
     setMembersCount('');
@@ -134,7 +161,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     setManualTotalAmount('');
     setPaymentStatus('Paid Full');
     setAmountPaid('');
-    setBalanceAccountPartnerId(partners[0]?.id || '');
+    setBalanceAccountPartnerId(irshad?.id || '');
     setValidationError(null);
   };
 
@@ -466,7 +493,16 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
         {/* Form Container */}
         <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md">
-          <form onSubmit={handleSubmit} className="space-y-3.5" id="income-entry-form">
+          <form
+            onSubmit={handleSubmit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+                e.preventDefault();
+              }
+            }}
+            className="space-y-3.5"
+            id="income-entry-form"
+          >
             {validationError && (
               <div
                 id="income-validation-error"
@@ -558,7 +594,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                     <select
                       id="income-by-who-select"
                       value={byWhoOption}
-                      onChange={(e) => setByWhoOption(e.target.value)}
+                      onChange={(e) => handleByWhoChange(e.target.value)}
                       className="w-full px-2 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
                     >
                       {byWhoOptions.map((opt) => (

@@ -97,7 +97,8 @@ export interface ExpenseRecord {
   date: string; // expense_date YYYY-MM-DD
   time?: string;
   category: ExpenseCategory;
-  name?: string; // description
+  description?: string | null;
+  name?: string; // alias for description
   amount: number;
   paidBy: string;
   paidByPartnerId?: string | null;

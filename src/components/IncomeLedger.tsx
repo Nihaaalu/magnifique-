@@ -738,7 +738,15 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleSaveEdit} className="space-y-3.5">
+            <form
+              onSubmit={handleSaveEdit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+                  e.preventDefault();
+                }
+              }}
+              className="space-y-3.5"
+            >
               {/* Plan Switcher */}
               <div>
                 <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Plan</label>

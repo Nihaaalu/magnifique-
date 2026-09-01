@@ -209,9 +209,18 @@ export async function fetchIncomeEntries(): Promise<IncomeRecord[]> {
 export async function createIncomeEntry(
   entry: Omit<IncomeEntryRow, 'id' | 'created_at' | 'updated_at'>
 ): Promise<any> {
-  const isAlaCarte = entry.meal_plan === 'alacarte' || entry.income_type === 'À La Carte' || String(entry.income_type).toLowerCase() === 'alacarte';
+  const isAlaCarte =
+    entry.meal_plan === 'alacarte' ||
+    entry.income_type === 'alacarte' ||
+    entry.income_type === 'À La Carte' ||
+    String(entry.income_type).toLowerCase() === 'alacarte';
+
   const totalAmount = Number(entry.total_amount) || 0;
   const amountReceived = Number(entry.amount_received) || 0;
+  const balanceAmount =
+    entry.balance_amount !== undefined && entry.balance_amount !== null
+      ? Number(entry.balance_amount)
+      : Math.max(0, totalAmount - amountReceived);
 
   // DB payment_status check constraint: 'paid_full' | 'paid_partial' | 'balance'
   let dbPaymentStatus: 'paid_full' | 'paid_partial' | 'balance' = 'paid_full';
@@ -229,7 +238,7 @@ export async function createIncomeEntry(
   const dPrice = entry.dinner_price != null ? Number(entry.dinner_price) : null;
   const sumPrices = (bPrice || 0) + (lPrice || 0) + (dPrice || 0);
 
-  // DB meal_type check constraint: 'breakfast' | 'lunch' | 'dinner' (or null for alacarte)
+  // DB meal_type check constraint: 'breakfast' | 'lunch' | 'dinner' (MUST be NULL for alacarte)
   let dbMealType: 'breakfast' | 'lunch' | 'dinner' | null = null;
   if (!isAlaCarte) {
     if (entry.meal_combination === 'lunch') dbMealType = 'lunch';
@@ -241,14 +250,15 @@ export async function createIncomeEntry(
   const insertPayload: Record<string, any> = {
     entry_date: entry.entry_date,
     income_type: isAlaCarte ? 'alacarte' : 'meal',
-    meal_plan: entry.meal_plan,
+    meal_plan: isAlaCarte ? 'alacarte' : entry.meal_plan,
     meal_combination: isAlaCarte ? null : entry.meal_combination,
     breakfast_price: isAlaCarte ? null : bPrice,
     lunch_price: isAlaCarte ? null : lPrice,
     dinner_price: isAlaCarte ? null : dPrice,
-    meal_type: dbMealType,
+    meal_type: isAlaCarte ? null : dbMealType,
     total_amount: totalAmount,
     amount_received: amountReceived,
+    balance_amount: balanceAmount,
     payment_status: dbPaymentStatus,
     by_who: isAlaCarte ? null : (entry.by_who || 'IRSHAD'),
     travel_name: entry.travel_name || null,
@@ -295,54 +305,59 @@ export async function updateIncomeEntry(
   if (entry.entry_date !== undefined) updatePayload.entry_date = entry.entry_date;
   if (entry.travel_name !== undefined) updatePayload.travel_name = entry.travel_name;
 
-  if (entry.meal_plan !== undefined) {
-    updatePayload.meal_plan = entry.meal_plan;
-  }
-  if (entry.meal_combination !== undefined) {
-    updatePayload.meal_combination = entry.meal_combination;
-  }
-  if (entry.breakfast_price !== undefined) {
-    updatePayload.breakfast_price = entry.breakfast_price != null ? Number(entry.breakfast_price) : null;
-  }
-  if (entry.lunch_price !== undefined) {
-    updatePayload.lunch_price = entry.lunch_price != null ? Number(entry.lunch_price) : null;
-  }
-  if (entry.dinner_price !== undefined) {
-    updatePayload.dinner_price = entry.dinner_price != null ? Number(entry.dinner_price) : null;
-  }
-
   const isAlaCarte =
     entry.meal_plan === 'alacarte' ||
+    entry.income_type === 'alacarte' ||
     entry.income_type === 'À La Carte' ||
     String(entry.income_type).toLowerCase() === 'alacarte';
 
   if (entry.income_type !== undefined || entry.meal_plan !== undefined) {
     updatePayload.income_type = isAlaCarte ? 'alacarte' : 'meal';
+    updatePayload.meal_plan = isAlaCarte ? 'alacarte' : entry.meal_plan;
   }
 
-  if (entry.by_who !== undefined) {
-    updatePayload.by_who = isAlaCarte ? null : entry.by_who;
-  }
-
-  if (entry.meal_type !== undefined || entry.meal_combination !== undefined) {
-    if (isAlaCarte) {
-      updatePayload.meal_type = null;
-    } else if (entry.meal_combination === 'lunch') {
-      updatePayload.meal_type = 'lunch';
-    } else if (entry.meal_combination === 'dinner') {
-      updatePayload.meal_type = 'dinner';
-    } else if (entry.meal_combination === 'lunch_dinner') {
-      updatePayload.meal_type = 'lunch';
-    } else {
-      updatePayload.meal_type = 'breakfast';
+  if (isAlaCarte) {
+    updatePayload.meal_type = null;
+    updatePayload.by_who = null;
+    updatePayload.meal_combination = null;
+    updatePayload.breakfast_price = null;
+    updatePayload.lunch_price = null;
+    updatePayload.dinner_price = null;
+    updatePayload.member_count = null;
+    updatePayload.price_per_member = null;
+  } else {
+    if (entry.meal_combination !== undefined) {
+      updatePayload.meal_combination = entry.meal_combination;
     }
-  }
-
-  if (entry.member_count !== undefined) {
-    updatePayload.member_count = isAlaCarte ? null : (entry.member_count ? Number(entry.member_count) : null);
-  }
-  if (entry.price_per_member !== undefined) {
-    updatePayload.price_per_member = isAlaCarte ? null : (entry.price_per_member ? Number(entry.price_per_member) : null);
+    if (entry.breakfast_price !== undefined) {
+      updatePayload.breakfast_price = entry.breakfast_price != null ? Number(entry.breakfast_price) : null;
+    }
+    if (entry.lunch_price !== undefined) {
+      updatePayload.lunch_price = entry.lunch_price != null ? Number(entry.lunch_price) : null;
+    }
+    if (entry.dinner_price !== undefined) {
+      updatePayload.dinner_price = entry.dinner_price != null ? Number(entry.dinner_price) : null;
+    }
+    if (entry.by_who !== undefined) {
+      updatePayload.by_who = entry.by_who || 'IRSHAD';
+    }
+    if (entry.member_count !== undefined) {
+      updatePayload.member_count = entry.member_count ? Number(entry.member_count) : null;
+    }
+    if (entry.price_per_member !== undefined) {
+      updatePayload.price_per_member = entry.price_per_member ? Number(entry.price_per_member) : null;
+    }
+    if (entry.meal_type !== undefined || entry.meal_combination !== undefined) {
+      if (entry.meal_combination === 'lunch') {
+        updatePayload.meal_type = 'lunch';
+      } else if (entry.meal_combination === 'dinner') {
+        updatePayload.meal_type = 'dinner';
+      } else if (entry.meal_combination === 'lunch_dinner') {
+        updatePayload.meal_type = 'lunch';
+      } else {
+        updatePayload.meal_type = 'breakfast';
+      }
+    }
   }
 
   const newTotal =
@@ -363,6 +378,8 @@ export async function updateIncomeEntry(
   if (newReceived !== undefined) updatePayload.amount_received = newReceived;
 
   if (newTotal !== undefined && newReceived !== undefined) {
+    const bal = Math.max(0, newTotal - newReceived);
+    updatePayload.balance_amount = bal;
     if (newReceived >= newTotal) {
       updatePayload.payment_status = 'paid_full';
       updatePayload.balance_account_partner_id = null;
@@ -371,6 +388,8 @@ export async function updateIncomeEntry(
     } else {
       updatePayload.payment_status = 'balance';
     }
+  } else if (entry.balance_amount !== undefined) {
+    updatePayload.balance_amount = Number(entry.balance_amount);
   }
 
   if (entry.balance_account_partner_id !== undefined) {
@@ -457,6 +476,7 @@ export async function fetchExpenseEntries(): Promise<ExpenseRecord[]> {
       date: row.expense_date,
       time: timeStr,
       category: mappedCategory,
+      description: row.description || null,
       name: row.description || undefined,
       amount: Number(row.amount) || 0,
       paidBy: isHotel ? 'Hotel' : (row.paid_by || 'Hotel'),
@@ -467,7 +487,7 @@ export async function fetchExpenseEntries(): Promise<ExpenseRecord[]> {
 }
 
 export async function createExpenseEntry(
-  expense: Omit<ExpenseEntryRow, 'id' | 'created_at' | 'updated_at'>
+  expense: Omit<ExpenseEntryRow, 'id' | 'created_at' | 'updated_at'> & { name?: string }
 ): Promise<any> {
   const cat = String(expense.category).toLowerCase();
   let dbCategory: 'staff' | 'groceries' | 'other' = 'other';
@@ -476,11 +496,12 @@ export async function createExpenseEntry(
   else dbCategory = 'other';
 
   const isHotel = !expense.paid_by || expense.paid_by.toUpperCase() === 'HOTEL' || !expense.paid_by_partner_id;
+  const desc = expense.description !== undefined ? expense.description : (expense.name || null);
 
   const insertPayload = {
     expense_date: expense.expense_date,
     category: dbCategory,
-    description: expense.description || null,
+    description: desc || null,
     amount: Number(expense.amount) || 0,
     paid_by: isHotel ? 'HOTEL' : expense.paid_by.toUpperCase(),
     paid_by_partner_id: isHotel ? null : (Number(expense.paid_by_partner_id) || expense.paid_by_partner_id),
@@ -502,14 +523,18 @@ export async function createExpenseEntry(
 
 export async function updateExpenseEntry(
   id: string,
-  expense: Partial<ExpenseEntryRow>
+  expense: Partial<ExpenseEntryRow> & { name?: string }
 ): Promise<any> {
   const updatePayload: Record<string, any> = {
     updated_at: new Date().toISOString(),
   };
 
   if (expense.expense_date !== undefined) updatePayload.expense_date = expense.expense_date;
-  if (expense.description !== undefined) updatePayload.description = expense.description;
+  if (expense.description !== undefined) {
+    updatePayload.description = expense.description || null;
+  } else if (expense.name !== undefined) {
+    updatePayload.description = expense.name || null;
+  }
   if (expense.amount !== undefined) updatePayload.amount = Number(expense.amount);
 
   if (expense.category !== undefined) {

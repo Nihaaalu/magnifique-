@@ -232,7 +232,11 @@ export default function App() {
     const rowUpdates: Partial<ExpenseEntryRow> = {};
     if (updates.date !== undefined) rowUpdates.expense_date = updates.date;
     if (updates.category !== undefined) rowUpdates.category = updates.category;
-    if (updates.name !== undefined) rowUpdates.description = updates.name || null;
+    if (updates.description !== undefined) {
+      rowUpdates.description = updates.description || null;
+    } else if (updates.name !== undefined) {
+      rowUpdates.description = updates.name || null;
+    }
     if (updates.amount !== undefined) rowUpdates.amount = updates.amount;
     if (updates.paidBy !== undefined) rowUpdates.paid_by = updates.paidBy;
     if (updates.paidByPartnerId !== undefined) {

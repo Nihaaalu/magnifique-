@@ -182,7 +182,7 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
     setEditingRecord(record);
     setEditDate(record.date);
     setEditCategory(record.category);
-    setEditName(record.name || '');
+    setEditName(record.description || record.name || '');
     setEditAmount(String(record.amount));
     setEditPaidBy(record.paidBy);
     setEditError(null);
@@ -209,6 +209,7 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
       await onUpdateExpense(editingRecord.id, {
         date: editDate,
         category: editCategory,
+        description: editName.trim() || null,
         name: editName.trim() || undefined,
         amount: parsedAmount,
         paidBy: editPaidBy as any,
@@ -239,6 +240,7 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
 
   const renderExpenseRow = (record: ExpenseRecord) => {
     const isDeleting = deletingId === record.id;
+    const displayName = record.description || record.name;
 
     return (
       <div
@@ -253,11 +255,11 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
             <span className="font-bold text-[#D4AF37] uppercase text-[11px] bg-[#1D1D1D] px-1.5 py-0.5 rounded border border-[#2A2A2A]">
               {record.category}
             </span>
-            {record.name && (
+            {displayName && (
               <>
                 <span className="text-[#777777]">•</span>
                 <span className="font-bold text-[#F5F5F5] truncate">
-                  {record.name}
+                  {displayName}
                 </span>
               </>
             )}
@@ -485,7 +487,15 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleSaveEdit} className="space-y-3">
+            <form
+              onSubmit={handleSaveEdit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+                  e.preventDefault();
+                }
+              }}
+              className="space-y-3"
+            >
               <div>
                 <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Category</label>
                 <div className="grid grid-cols-3 gap-1.5">

@@ -32,7 +32,7 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
   isLoading,
 }) => {
   const [category, setCategory] = useState<ExpenseCategory>('Groceries');
-  const [name, setName] = useState<string>('');
+  const [description, setDescription] = useState<string>('');
   const [amount, setAmount] = useState<string>('');
   const [paidBy, setPaidBy] = useState<string>('Hotel');
   const [expenseDate, setExpenseDate] = useState<string>(getTodayDateString());
@@ -58,7 +58,7 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
 
   const handleResetForm = () => {
     setCategory('Groceries');
-    setName('');
+    setDescription('');
     setAmount('');
     setPaidBy('Hotel');
     setValidationError(null);
@@ -81,9 +81,9 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
     setIsSubmitting(true);
     try {
       await onAddExpense({
-        entry_date: expenseDate || getTodayDateString(),
+        expense_date: expenseDate || getTodayDateString(),
         category,
-        name: name.trim() || null,
+        description: description.trim() || null,
         amount: parsedAmount,
         paid_by: paidBy,
         paid_by_partner_id: matchedPartner ? matchedPartner.id : null,
@@ -141,7 +141,16 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
 
         {/* Expense Form Card */}
         <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md">
-          <form onSubmit={handleSubmit} className="space-y-3.5" id="expense-entry-form">
+          <form
+            onSubmit={handleSubmit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+                e.preventDefault();
+              }
+            }}
+            className="space-y-3.5"
+            id="expense-entry-form"
+          >
             {validationError && (
               <div
                 id="expense-validation-error"
@@ -221,8 +230,8 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
                 type="text"
                 id="expense-description-input"
                 placeholder={getPlaceholderForCategory(category)}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
                 className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
               />
             </div>
