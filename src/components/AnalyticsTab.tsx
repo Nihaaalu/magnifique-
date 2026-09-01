@@ -237,7 +237,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
         setDownloadMsg(
           `Month ${formatPdfMonth(
             monthToClose
-          )} has been closed in Supabase. Next month starts with ₹0 opening balance.`
+          )} has been closed. Final closing balance (${formatCurrency(summary.closingBalance)}) is set as next month's opening balance.`
         );
       } catch (err: any) {
         console.error('Failed to close month in Supabase:', err);
@@ -898,8 +898,8 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                   Close this month's accounts?
                 </p>
                 <p>
-                  The next month will start with{' '}
-                  <strong className="text-[#F5F5F5] font-bold">₹0 opening balance</strong>.
+                  Once officially closed, this month's final closing balance will become the next month's{' '}
+                  <strong className="text-[#F5F5F5] font-bold">opening balance</strong>.
                 </p>
               </div>
             )}

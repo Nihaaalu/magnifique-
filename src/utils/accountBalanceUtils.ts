@@ -129,6 +129,15 @@ export function getAllUniqueMonths(
 
 /**
  * Calculate the running balances for all months chronologically using account_months as persistent state.
+ * 
+ * RULES:
+ * 1. Opening balance must always be calculated from VALID EXISTING ACCOUNT DATA only.
+ * 2. Deleted income or expense entries must have ZERO effect on balances or totals.
+ * 3. For the first active month with no previous valid closed balance: Opening Balance = ₹0.
+ * 4. For subsequent months: Opening Balance = previous month's VALID closing balance, only if that previous month was actually closed.
+ * 5. If previous month was NOT officially closed: Opening Balance = ₹0.
+ * 6. Closing balance formula: Closing Balance = Opening Balance + Total Income - Total Expense.
+ * 7. Total Income means TOTAL BILLED amount (total_amount), including unpaid balance.
  */
 export function calculateAllMonthsSummary(
   incomeRecords: IncomeRecord[] = [],
@@ -139,9 +148,8 @@ export function calculateAllMonthsSummary(
   const sortedMonths = getAllUniqueMonths(incomeRecords, expenseRecords, accountMonths, partnerSettlements);
   const result: Record<string, MonthBalanceSummary> = {};
 
-  let runningOpeningBalance = 0;
-
-  for (const month of sortedMonths) {
+  for (let i = 0; i < sortedMonths.length; i++) {
+    const month = sortedMonths[i];
     const monthStartPrefix = month;
     const dbMonth = accountMonths.find((m) =>
       m.month_start && m.month_start.startsWith(monthStartPrefix)
@@ -171,18 +179,25 @@ export function calculateAllMonthsSummary(
     }, 0);
 
     // Opening balance rule:
-    // If persistent account_months has an explicit opening balance, use it.
-    // Otherwise use runningOpeningBalance.
-    let opening = dbMonth !== undefined && dbMonth.opening_balance !== undefined
-      ? dbMonth.opening_balance
-      : runningOpeningBalance;
+    // - For the first month (i === 0): Opening Balance = 0.
+    // - For subsequent months: Opening Balance = previous month's closing balance ONLY IF previous month was officially closed.
+    // - If previous month was NOT closed: Opening Balance = 0 (do not carry forward unclosed temporary/test balances).
+    let opening = 0;
+    if (i > 0) {
+      const prevMonthKey = sortedMonths[i - 1];
+      const prevSummary = result[prevMonthKey];
+      if (prevSummary && prevSummary.isClosed) {
+        opening = prevSummary.closingBalance;
+      } else {
+        opening = 0;
+      }
+    }
 
     // Closing balance rule:
     // CLOSING BALANCE = OPENING BALANCE + TOTAL INCOME - TOTAL EXPENSE
-    // Full total income (including unpaid/outstanding) is included.
-    let closing = isClosed && dbMonth?.closing_balance !== undefined
-      ? dbMonth.closing_balance
-      : opening + totalIncome - totalExpense;
+    // Total Income = full billed amount (total_amount).
+    // Total Balance / unpaid receivables is NOT subtracted.
+    const closing = opening + totalIncome - totalExpense;
 
     const [yearStr, monthNumStr] = month.split('-');
     const year = parseInt(yearStr, 10);
@@ -207,15 +222,6 @@ export function calculateAllMonthsSummary(
       firstDate,
       lastDate,
     };
-
-    // Determine starting balance for NEXT month:
-    // If THIS month is closed, next month starts with ₹0 opening balance!
-    // Otherwise, it carries forward THIS month's closing balance.
-    if (isClosed) {
-      runningOpeningBalance = 0;
-    } else {
-      runningOpeningBalance = closing;
-    }
   }
 
   return result;
@@ -223,8 +229,13 @@ export function calculateAllMonthsSummary(
 
 /**
  * Calculate the day-by-day running balance for a specific day.
- * - Opening balance = previous day's closing balance (starting day 1 with month's opening_balance)
- * - Closing balance = opening + day total income - day expense
+ * 
+ * RULES:
+ * 1. For Day 1 of the month: Opening balance = month's opening balance (previous closed month's balance or ₹0).
+ * 2. For subsequent days: Opening balance = previous day's VALID closing balance.
+ * 3. Daily closing balance = Day Opening Balance + Day Total Income (billed) - Day Total Expense.
+ * 4. Current day's income NEVER affects its own opening balance.
+ * 5. Calculated strictly from valid active records in memory / database.
  */
 export function calculateDayBalanceSummary(
   targetDate: string,
@@ -240,36 +251,47 @@ export function calculateDayBalanceSummary(
     accountMonths,
     partnerSettlements
   );
-  const monthSummary = allMonths[targetMonth] || {
-    openingBalance: 0,
-  };
+  const monthSummary = allMonths[targetMonth];
+  const monthOpeningBalance = monthSummary ? monthSummary.openingBalance : 0;
 
-  // Month starts with monthSummary.openingBalance on day 1
-  let currentOpening = monthSummary.openingBalance;
+  // Find all unique days in this month that have account activity, plus targetDate
+  const daysInMonthSet = new Set<string>();
+  daysInMonthSet.add(targetDate);
 
-  // Find all days in this month up to targetDate
-  const daysInMonth = Array.from(
-    new Set([
-      ...incomeRecords.filter((r) => r.date.startsWith(targetMonth)).map((r) => r.date),
-      ...expenseRecords.filter((r) => r.date.startsWith(targetMonth)).map((r) => r.date),
-      ...partnerSettlements.filter((s) => s.date.startsWith(targetMonth)).map((s) => s.date),
-      targetDate,
-    ])
-  ).sort((a, b) => a.localeCompare(b));
+  incomeRecords.forEach((r) => {
+    if (r.date && r.date.startsWith(targetMonth)) {
+      daysInMonthSet.add(r.date);
+    }
+  });
 
+  expenseRecords.forEach((r) => {
+    if (r.date && r.date.startsWith(targetMonth)) {
+      daysInMonthSet.add(r.date);
+    }
+  });
+
+  partnerSettlements.forEach((s) => {
+    if (s.date && s.date.startsWith(targetMonth)) {
+      daysInMonthSet.add(s.date);
+    }
+  });
+
+  const sortedDays = Array.from(daysInMonthSet).sort((a, b) => a.localeCompare(b));
+
+  let currentOpening = monthOpeningBalance;
   let targetDaySummary: DayBalanceSummary = {
     date: targetDate,
-    openingBalance: currentOpening,
+    openingBalance: monthOpeningBalance,
     totalIncome: 0,
     totalPaid: 0,
     totalBalance: 0,
     totalExpense: 0,
     settlementToHotel: 0,
     settlementFromHotel: 0,
-    closingBalance: currentOpening,
+    closingBalance: monthOpeningBalance,
   };
 
-  for (const day of daysInMonth) {
+  for (const day of sortedDays) {
     const dayInc = incomeRecords.filter((r) => r.date === day);
     const dayExp = expenseRecords.filter((r) => r.date === day);
     const daySet = partnerSettlements.filter((s) => s.date === day);
@@ -291,7 +313,6 @@ export function calculateDayBalanceSummary(
 
     // Daily Closing balance rule:
     // CLOSING BALANCE = OPENING BALANCE + TOTAL INCOME - TOTAL EXPENSE
-    // Full total income (including unpaid/outstanding) is included.
     const closing = currentOpening + totalIncome - totalExpense;
 
     if (day === targetDate) {
