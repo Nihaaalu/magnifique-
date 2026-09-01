@@ -46,7 +46,7 @@ export interface IncomeEntryRow {
   price_per_member?: number | null;
   total_amount: number;
   amount_received: number;
-  balance_amount: number;
+  balance_amount?: number;
   payment_status: 'paid_full' | 'paid_partial' | 'balance' | 'Paid Full' | 'Balance';
   by_who: string | null;
   balance_account_partner_id: string | number | null;

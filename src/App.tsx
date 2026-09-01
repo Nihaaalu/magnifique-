@@ -185,7 +185,6 @@ export default function App() {
     if (updates.pricePerMember !== undefined) rowUpdates.price_per_member = updates.pricePerMember;
     if (updates.total !== undefined) rowUpdates.total_amount = updates.total;
     if (updates.amountPaid !== undefined) rowUpdates.amount_received = updates.amountPaid;
-    if (updates.balance !== undefined) rowUpdates.balance_amount = updates.balance;
     if (updates.paymentStatus !== undefined) {
       rowUpdates.payment_status = updates.paymentStatus === 'Paid Full' ? 'Paid Full' : 'Balance';
     }

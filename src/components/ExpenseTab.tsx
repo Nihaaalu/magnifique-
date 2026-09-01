@@ -64,8 +64,8 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
     setValidationError(null);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setValidationError(null);
 
     const parsedAmount = parseFloat(amount);
@@ -142,7 +142,9 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
         {/* Expense Form Card */}
         <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md">
           <form
-            onSubmit={handleSubmit}
+            onSubmit={(e) => {
+              e.preventDefault();
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
                 e.preventDefault();
@@ -275,8 +277,9 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
                 Clear
               </button>
               <button
-                type="submit"
+                type="button"
                 id="expense-save-btn"
+                onClick={() => handleSubmit()}
                 disabled={isSubmitting}
                 className="flex-1 py-2.5 px-4 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] rounded-lg text-xs sm:text-sm font-black tracking-wider uppercase transition-all shadow-xs cursor-pointer min-h-[44px] text-center disabled:opacity-50"
               >

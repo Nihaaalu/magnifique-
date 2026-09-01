@@ -217,10 +217,6 @@ export async function createIncomeEntry(
 
   const totalAmount = Number(entry.total_amount) || 0;
   const amountReceived = Number(entry.amount_received) || 0;
-  const balanceAmount =
-    entry.balance_amount !== undefined && entry.balance_amount !== null
-      ? Number(entry.balance_amount)
-      : Math.max(0, totalAmount - amountReceived);
 
   // DB payment_status check constraint: 'paid_full' | 'paid_partial' | 'balance'
   let dbPaymentStatus: 'paid_full' | 'paid_partial' | 'balance' = 'paid_full';
@@ -247,6 +243,7 @@ export async function createIncomeEntry(
     else dbMealType = 'breakfast';
   }
 
+  // NOTE: Never send balance_amount - PostgreSQL automatically generates it: GREATEST(total_amount - amount_received, 0)
   const insertPayload: Record<string, any> = {
     entry_date: entry.entry_date,
     income_type: isAlaCarte ? 'alacarte' : 'meal',
@@ -258,7 +255,6 @@ export async function createIncomeEntry(
     meal_type: isAlaCarte ? null : dbMealType,
     total_amount: totalAmount,
     amount_received: amountReceived,
-    balance_amount: balanceAmount,
     payment_status: dbPaymentStatus,
     by_who: isAlaCarte ? null : (entry.by_who || 'IRSHAD'),
     travel_name: entry.travel_name || null,
@@ -378,8 +374,6 @@ export async function updateIncomeEntry(
   if (newReceived !== undefined) updatePayload.amount_received = newReceived;
 
   if (newTotal !== undefined && newReceived !== undefined) {
-    const bal = Math.max(0, newTotal - newReceived);
-    updatePayload.balance_amount = bal;
     if (newReceived >= newTotal) {
       updatePayload.payment_status = 'paid_full';
       updatePayload.balance_account_partner_id = null;
@@ -388,9 +382,9 @@ export async function updateIncomeEntry(
     } else {
       updatePayload.payment_status = 'balance';
     }
-  } else if (entry.balance_amount !== undefined) {
-    updatePayload.balance_amount = Number(entry.balance_amount);
   }
+
+  // NOTE: Never send balance_amount - PostgreSQL automatically calculates and maintains it
 
   if (entry.balance_account_partner_id !== undefined) {
     updatePayload.balance_account_partner_id = entry.balance_account_partner_id

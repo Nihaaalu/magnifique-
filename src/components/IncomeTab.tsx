@@ -102,6 +102,17 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
   const isAlaCarte = selectedPlan === 'alacarte';
 
+  const handlePlanChange = (plan: MealPlan) => {
+    setSelectedPlan(plan);
+    setValidationError(null);
+    if (plan === 'alacarte') {
+      const irshad = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
+      if (irshad) {
+        setBalanceAccountPartnerId(irshad.id);
+      }
+    }
+  };
+
   // Numerical values
   const countNum = Math.max(0, parseInt(membersCount, 10) || 0);
   const bPriceNum = Math.max(0, parseFloat(breakfastPrice) || 0);
@@ -192,8 +203,8 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     return 'SAVE 3 TIME (BREAKFAST + LUNCH + DINNER)';
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setValidationError(null);
 
     if (isAlaCarte) {
@@ -322,7 +333,6 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         member_count: isAlaCarte ? null : countNum,
         total_amount: totalCalculated,
         amount_received: finalPaid,
-        balance_amount: finalBalance,
         payment_status: dbPaymentStatus,
         by_who: resolvedByWho,
         balance_account_partner_id: partnerIdForBalance,
@@ -394,10 +404,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                 key={plan.id}
                 type="button"
                 id={`plan-btn-${plan.id}`}
-                onClick={() => {
-                  setSelectedPlan(plan.id);
-                  setValidationError(null);
-                }}
+                onClick={() => handlePlanChange(plan.id)}
                 className={`py-2 px-1 text-xs font-bold rounded-md transition-all cursor-pointer text-center min-h-[42px] tracking-wide uppercase ${
                   isSelected
                     ? 'bg-[#D4AF37] text-[#0A0A0A] font-black shadow-xs'
@@ -494,7 +501,9 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         {/* Form Container */}
         <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md">
           <form
-            onSubmit={handleSubmit}
+            onSubmit={(e) => {
+              e.preventDefault();
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
                 e.preventDefault();
@@ -1026,8 +1035,9 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                 Clear
               </button>
               <button
-                type="submit"
+                type="button"
                 id="income-save-btn"
+                onClick={() => handleSubmit()}
                 disabled={isSubmitting}
                 className="flex-1 py-2.5 px-4 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] rounded-lg text-xs sm:text-sm font-black tracking-wider uppercase transition-all shadow-xs cursor-pointer min-h-[44px] text-center disabled:opacity-50"
               >

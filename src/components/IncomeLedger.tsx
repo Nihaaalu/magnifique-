@@ -330,8 +330,8 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     setEditError(null);
   };
 
-  const handleSaveEdit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveEdit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!editingRecord || !onUpdateIncome) return;
     setEditSubmitting(true);
     setEditError(null);
@@ -739,7 +739,9 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
             )}
 
             <form
-              onSubmit={handleSaveEdit}
+              onSubmit={(e) => {
+                e.preventDefault();
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
                   e.preventDefault();
@@ -1098,7 +1100,8 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                   Cancel
                 </button>
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={() => handleSaveEdit()}
                   disabled={editSubmitting}
                   className="px-4 py-1.5 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] rounded text-xs font-black"
                 >

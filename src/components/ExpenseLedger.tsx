@@ -188,8 +188,8 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
     setEditError(null);
   };
 
-  const handleSaveEdit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveEdit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!editingRecord || !onUpdateExpense) return;
     setEditSubmitting(true);
     setEditError(null);
@@ -240,7 +240,7 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
 
   const renderExpenseRow = (record: ExpenseRecord) => {
     const isDeleting = deletingId === record.id;
-    const displayName = record.description || record.name;
+    const mainTitle = record.description || record.name || record.category;
 
     return (
       <div
@@ -250,18 +250,15 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
         }`}
       >
         <div className="min-w-0 flex-1">
-          {/* Top Line: Category & Description */}
+          {/* Top Line: Description or Category */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="font-bold text-[#D4AF37] uppercase text-[11px] bg-[#1D1D1D] px-1.5 py-0.5 rounded border border-[#2A2A2A]">
-              {record.category}
+            <span className="font-bold text-[#F5F5F5] text-xs truncate">
+              {mainTitle}
             </span>
-            {displayName && (
-              <>
-                <span className="text-[#777777]">•</span>
-                <span className="font-bold text-[#F5F5F5] truncate">
-                  {displayName}
-                </span>
-              </>
+            {(record.description || record.name) && (
+              <span className="font-semibold text-[#D4AF37] uppercase text-[10px] bg-[#1D1D1D] px-1.5 py-0.5 rounded border border-[#2A2A2A]">
+                {record.category}
+              </span>
             )}
           </div>
 
@@ -488,7 +485,9 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
             )}
 
             <form
-              onSubmit={handleSaveEdit}
+              onSubmit={(e) => {
+                e.preventDefault();
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
                   e.preventDefault();
@@ -574,7 +573,8 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
                   Cancel
                 </button>
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={() => handleSaveEdit()}
                   disabled={editSubmitting}
                   className="px-4 py-1.5 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] rounded text-xs font-black"
                 >
