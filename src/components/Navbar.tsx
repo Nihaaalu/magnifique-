@@ -1,13 +1,20 @@
 import React from 'react';
 import { TabType } from '../types';
-import { ArrowDownLeft, ArrowUpRight, Users, BarChart3 } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Users, BarChart3, RotateCw } from 'lucide-react';
 
 interface NavbarProps {
   activeTab: TabType;
   setActiveTab: (tab: TabType) => void;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  activeTab,
+  setActiveTab,
+  onRefresh,
+  isRefreshing = false,
+}) => {
   const tabs: {
     id: TabType;
     label: string;
@@ -61,6 +68,19 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                 <span className="text-xs sm:text-sm font-black tracking-widest text-[#D4AF37] uppercase">
                   MAGNIFIQUE 2.0
                 </span>
+                {onRefresh && (
+                  <button
+                    type="button"
+                    id="btn-header-refresh"
+                    onClick={onRefresh}
+                    disabled={isRefreshing}
+                    title="Refresh data"
+                    className="p-1 rounded-md bg-[#171717] hover:bg-[#222222] border border-[#2A2A2A] hover:border-[#D4AF37] text-[#D4AF37] hover:text-[#F2C94C] transition-all cursor-pointer shadow-xs disabled:opacity-50 flex items-center justify-center"
+                    aria-label="Refresh data"
+                  >
+                    <RotateCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
               </div>
               <span className="text-[10px] text-[#777777] font-medium tracking-tight block">
                 Restaurant Accounts

@@ -28,7 +28,6 @@ import {
   getOrCreateAccountMonth,
   closeAccountMonthInDb,
   reopenAccountMonthInDb,
-  getAppLockStatus,
 } from './services/supabaseService';
 import { getCurrentMonthString } from './utils/formatters';
 import { calculateAllMonthsSummary } from './utils/accountBalanceUtils';
@@ -40,10 +39,14 @@ import { AnalyticsTab } from './components/AnalyticsTab';
 import { AppLockScreen } from './components/AppLockScreen';
 import { AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes in milliseconds
+const UNLOCKED_STORAGE_KEY = 'magnifique_app_unlocked';
+const LAST_ACTIVITY_STORAGE_KEY = 'magnifique_last_activity';
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('income');
 
-  // Application Lock State (InMemory only for current active session)
+  // Application Lock State (Browser-local with 30-minute inactivity timeout)
   const [isLocked, setIsLocked] = useState<boolean>(true);
   const [isCheckingLock, setIsCheckingLock] = useState<boolean>(true);
 
@@ -56,34 +59,131 @@ export default function App() {
   const [accountMonths, setAccountMonths] = useState<AccountMonthRow[]>([]);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Check initial app lock status from Supabase
+  // Check initial app lock status on startup/reload from browser storage
   useEffect(() => {
-    let isMounted = true;
-    async function checkLock() {
-      try {
-        const lockEnabled = await getAppLockStatus();
-        if (isMounted) {
-          setIsLocked(lockEnabled);
-        }
-      } catch (err) {
-        console.error('Failed to check app lock status:', err);
-        if (isMounted) {
-          setIsLocked(true);
-        }
-      } finally {
-        if (isMounted) {
-          setIsCheckingLock(false);
+    try {
+      const isUnlocked = localStorage.getItem(UNLOCKED_STORAGE_KEY) === 'true';
+      const lastActivityStr = localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY);
+      const lastActivity = lastActivityStr ? parseInt(lastActivityStr, 10) : 0;
+      const now = Date.now();
+
+      // If unlocked and active within the last 30 minutes, keep unlocked across page refresh
+      if (
+        isUnlocked &&
+        lastActivity > 0 &&
+        now - lastActivity < INACTIVITY_TIMEOUT_MS &&
+        now >= lastActivity
+      ) {
+        setIsLocked(false);
+      } else {
+        // Inactive for 30+ minutes or not unlocked
+        localStorage.removeItem(UNLOCKED_STORAGE_KEY);
+        localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
+        setIsLocked(true);
+      }
+    } catch (err) {
+      console.error('Failed to read lock state from localStorage:', err);
+      setIsLocked(true);
+    } finally {
+      setIsCheckingLock(false);
+    }
+  }, []);
+
+  // 30-minute Inactivity Detection & User Interaction Tracker
+  useEffect(() => {
+    if (isLocked) return;
+
+    let lastWriteTime = Date.now();
+
+    // Event listener: user interaction resets the 30-minute inactivity timer
+    const recordUserActivity = () => {
+      const now = Date.now();
+      // Throttle localStorage updates to at most once every 2 seconds to optimize performance
+      if (now - lastWriteTime >= 2000) {
+        lastWriteTime = now;
+        try {
+          localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, now.toString());
+        } catch (e) {
+          console.error('Failed to update activity timestamp:', e);
         }
       }
-    }
-
-    checkLock();
-    return () => {
-      isMounted = false;
     };
-  }, []);
+
+    // Ensure last activity and unlock flags are set on active session
+    try {
+      localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+      localStorage.setItem(UNLOCKED_STORAGE_KEY, 'true');
+    } catch {}
+
+    // Valid user interactions across desktop and mobile devices:
+    // mouse movement, click, keyboard input, touch, scrolling, form focus
+    const activityEvents: (keyof WindowEventMap)[] = [
+      'mousemove',
+      'mousedown',
+      'click',
+      'keydown',
+      'keyup',
+      'touchstart',
+      'touchend',
+      'scroll',
+      'wheel',
+      'focusin',
+    ];
+
+    activityEvents.forEach((event) => {
+      window.addEventListener(event, recordUserActivity, { passive: true });
+    });
+
+    // Periodic check every 5 seconds to lock if 30 minutes have elapsed with no activity
+    const intervalId = setInterval(() => {
+      try {
+        const lastActivityStr = localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY);
+        const lastActivity = lastActivityStr ? parseInt(lastActivityStr, 10) : 0;
+        const now = Date.now();
+
+        if (!lastActivity || now - lastActivity >= INACTIVITY_TIMEOUT_MS) {
+          // 30 minutes expired: lock application
+          localStorage.removeItem(UNLOCKED_STORAGE_KEY);
+          localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
+          setIsLocked(true);
+        }
+      } catch (e) {
+        console.error('Inactivity check error:', e);
+      }
+    }, 5000);
+
+    // Tab visibility change check (when returning to tab after being away)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const lastActivityStr = localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY);
+          const lastActivity = lastActivityStr ? parseInt(lastActivityStr, 10) : 0;
+          const now = Date.now();
+
+          if (!lastActivity || now - lastActivity >= INACTIVITY_TIMEOUT_MS) {
+            localStorage.removeItem(UNLOCKED_STORAGE_KEY);
+            localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
+            setIsLocked(true);
+          } else {
+            recordUserActivity();
+          }
+        } catch {}
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      activityEvents.forEach((event) => {
+        window.removeEventListener(event, recordUserActivity);
+      });
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isLocked]);
 
   // Load all initial data from Supabase PostgreSQL
   const loadData = useCallback(async () => {
@@ -287,11 +387,36 @@ export default function App() {
     setAccountMonths(updatedMonths);
   };
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+    } catch {}
+    try {
+      await loadData();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const handleUnlock = () => {
+    try {
+      const now = Date.now();
+      localStorage.setItem(UNLOCKED_STORAGE_KEY, 'true');
+      localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, now.toString());
+    } catch (e) {
+      console.error('Failed to save unlock state to localStorage:', e);
+    }
     setIsLocked(false);
   };
 
   const handleLockApp = () => {
+    try {
+      localStorage.removeItem(UNLOCKED_STORAGE_KEY);
+      localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
+    } catch (e) {
+      console.error('Failed to clear unlock state from localStorage:', e);
+    }
     setIsLocked(true);
   };
 
@@ -322,8 +447,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] flex flex-col font-sans selection:bg-[#D4AF37] selection:text-[#0A0A0A]">
-      {/* Mobile-First Header with 4-Tab Navigation */}
-      <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
+      {/* Mobile-First Header with 4-Tab Navigation & Refresh Control */}
+      <Navbar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        onRefresh={handleRefresh}
+        isRefreshing={isRefreshing}
+      />
 
       {/* Main Content */}
       <main className="flex-1 max-w-3xl w-full mx-auto px-3 sm:px-4 py-3.5 sm:py-5">
