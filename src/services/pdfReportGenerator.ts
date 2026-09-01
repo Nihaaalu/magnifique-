@@ -271,6 +271,7 @@ const formatExpenseName = (exp: ExpenseRecord): string => {
  * - Total Balance: Rs. XXXXX
  * - Total Expense: Rs. XXXXX
  * - Closing Balance (Date): Rs. XXXXX
+ * - IRSHAD BALANCE: Rs. XXXXX
  */
 const drawSummaryBox = (
   doc: jsPDF,
@@ -283,13 +284,14 @@ const drawSummaryBox = (
   totalExpense: number,
   closingBalance: number,
   closingDateStr: string,
+  irshadBalance: number,
   fontFamily: string,
   leftMargin: number,
   contentWidth: number,
   pageHeight: number
 ): number => {
   let y = startY;
-  const summaryBoxHeight = 56;
+  const summaryBoxHeight = 74;
 
   // Space check: ensure room for summary box before bottom footer
   if (y + summaryBoxHeight > pageHeight - 35) {
@@ -312,7 +314,7 @@ const drawSummaryBox = (
   doc.text('SUMMARY', leftMargin + 6, y + 9.5);
 
   // Row 1: Opening Balance, Total Income, Total Paid
-  const row1Y = y + 26;
+  const row1Y = y + 25;
   const colW = contentWidth / 3;
 
   // 1. Opening Balance (Date)
@@ -346,7 +348,7 @@ const drawSummaryBox = (
   doc.text(formatPdfCurrency(totalPaid), leftMargin + contentWidth - 8, row1Y, { align: 'right' });
 
   // Row 2: Total Balance, Total Expense, Closing Balance
-  const row2Y = y + 44;
+  const row2Y = y + 42;
 
   // 4. Total Balance
   doc.setFont(fontFamily, 'normal');
@@ -377,6 +379,17 @@ const drawSummaryBox = (
   doc.setFontSize(8.5);
   doc.setTextColor(180, 130, 20); // Warm Gold / Black
   doc.text(formatPdfCurrency(closingBalance), leftMargin + contentWidth - 8, row2Y, { align: 'right' });
+
+  // Row 3: Prominent IRSHAD BALANCE Highlight
+  doc.setFillColor(250, 245, 230); // Soft luxury gold tint
+  doc.setDrawColor(212, 175, 55); // Gold border
+  doc.setLineWidth(0.8);
+  doc.roundedRect(leftMargin + 6, y + 54, contentWidth - 12, 15, 1.5, 1.5, 'FD');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(180, 24, 24); // Noticeable bold contrast
+  doc.text(`IRSHAD BALANCE: ${formatPdfCurrency(irshadBalance)}`, leftMargin + contentWidth / 2, y + 64.5, { align: 'center' });
 
   return y + summaryBoxHeight;
 };
@@ -705,7 +718,12 @@ export const generateDailyAccountsPdf = (
 
   currentY = (doc as any).lastAutoTable.finalY + 12;
 
-  // 1. Draw Summary Box after ledger table
+  // 1. Calculate partner totals
+  const partnerTotals = calculatePartnerTotals(todayIncome, todayExpenses);
+  const irshadData = partnerTotals.find((p) => p.partner === 'IRSHAD');
+  const irshadBalance = irshadData ? irshadData.balanceToHotel : 0;
+
+  // 2. Draw Summary Box after ledger table
   currentY = drawSummaryBox(
     doc,
     currentY,
@@ -717,14 +735,14 @@ export const generateDailyAccountsPdf = (
     totalExpense,
     closingBalance,
     dateFormattedMedium,
+    irshadBalance,
     fontFamily,
     leftMargin,
     contentWidth,
     pageHeight
   );
 
-  // 2. Draw Partner Calculation Section after summary (always starts on a new A4 page)
-  const partnerTotals = calculatePartnerTotals(todayIncome, todayExpenses);
+  // 3. Draw Partner Calculation Section after summary (always starts on a new A4 page)
   drawPartnerCalculationSection(
     doc,
     partnerTotals,
@@ -940,7 +958,12 @@ export const generateMonthlyAccountsPdf = (
 
   currentY = (doc as any).lastAutoTable.finalY + 12;
 
-  // 1. Draw Summary Box after ledger table
+  // 1. Calculate partner totals
+  const partnerTotals = calculatePartnerTotals(monthIncome, monthExpenses);
+  const irshadData = partnerTotals.find((p) => p.partner === 'IRSHAD');
+  const irshadBalance = irshadData ? irshadData.balanceToHotel : 0;
+
+  // 2. Draw Summary Box after ledger table
   currentY = drawSummaryBox(
     doc,
     currentY,
@@ -952,14 +975,14 @@ export const generateMonthlyAccountsPdf = (
     totalExpense,
     closingBalance,
     lastDateFormatted,
+    irshadBalance,
     fontFamily,
     leftMargin,
     contentWidth,
     pageHeight
   );
 
-  // 2. Draw Partner Calculation Section after summary (always starts on a new A4 page)
-  const partnerTotals = calculatePartnerTotals(monthIncome, monthExpenses);
+  // 3. Draw Partner Calculation Section after summary (always starts on a new A4 page)
   drawPartnerCalculationSection(
     doc,
     partnerTotals,
