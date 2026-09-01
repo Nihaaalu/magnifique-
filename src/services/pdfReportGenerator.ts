@@ -6,10 +6,11 @@ import {
   calculateAllMonthsSummary,
 } from '../utils/accountBalanceUtils';
 
-// Format currency as Rs. 1,25,000
+// Format currency as Rs. 1,25,000 or -Rs. 2,000
 export const formatPdfCurrency = (amount: number): string => {
-  const num = Math.round(amount) || 0;
-  return `Rs. ${num.toLocaleString('en-IN')}`;
+  const isNegative = amount < 0;
+  const num = Math.round(Math.abs(amount)) || 0;
+  return `${isNegative ? '-' : ''}Rs. ${num.toLocaleString('en-IN')}`;
 };
 
 // Format Date YYYY-MM-DD to DD Month YYYY (e.g. 30 August 2026)
@@ -63,31 +64,64 @@ export const OFFICIAL_PARTNERS = ['ANSARI', 'IRSHAD', 'MUSADDIQ', 'SATHISH', 'YO
 
 export interface PartnerCalculationResult {
   partner: string;
-  balanceToHotel: number;
+  partnerBalance: number;
   expensesByThem: number;
+  toHotel: number;
+  balanceToHotel?: number;
 }
 
 function matchPartnerName(inputName: string, officialName: string): boolean {
   const normInput = (inputName || '').trim().toUpperCase();
   const normOfficial = officialName.toUpperCase();
+  if (!normInput || !normOfficial) return false;
   if (normInput === normOfficial) return true;
   if (normOfficial === 'MUSADDIQ' && (normInput === 'MUSSADDIQ' || normInput === 'MUSADDIQ')) return true;
   return false;
 }
 
 /**
- * Compute Partner Balances & Expenses for the ledger period
+ * Compute Partner Balances, Expenses, and NET "To Hotel" for the ledger period
+ * - Formula: PARTNER TO HOTEL = PARTNER BALANCE - PARTNER EXPENSES
  * - Aggregates ALL income and expense records independently
- * - Does not overwrite one partner's value with another
- * - Case-insensitive matching
+ * - Uses actual partners present in data alongside official partners
  */
 export const calculatePartnerTotals = (
   incomeList: IncomeRecord[],
   expenseList: ExpenseRecord[]
 ): PartnerCalculationResult[] => {
-  return OFFICIAL_PARTNERS.map((partnerName) => {
-    // 1. Balance to Hotel (Unpaid balance owed by or attributed to this partner)
-    const balanceToHotel = incomeList.reduce((sum, inc) => {
+  const partnerSet = new Set<string>();
+  OFFICIAL_PARTNERS.forEach((p) => partnerSet.add(p));
+
+  // Dynamically include any partner present in income or expense records
+  incomeList.forEach((inc) => {
+    const pAccountName = (inc.balanceAccountPartnerName || '').trim().toUpperCase();
+    if (pAccountName && pAccountName !== 'LOKESH') partnerSet.add(pAccountName);
+    const pAccountId = (inc.balanceAccountPartnerId || '').toString().trim().toUpperCase();
+    if (pAccountId && isNaN(Number(pAccountId)) && pAccountId !== 'LOKESH') partnerSet.add(pAccountId);
+  });
+
+  expenseList.forEach((exp) => {
+    const paidBy = (exp.paidBy || '').trim().toUpperCase();
+    if (paidBy && paidBy !== 'HOTEL' && paidBy !== 'CASH' && paidBy !== 'LOKESH') partnerSet.add(paidBy);
+    const paidByPartnerId = (exp.paidByPartnerId || '').toString().trim().toUpperCase();
+    if (paidByPartnerId && isNaN(Number(paidByPartnerId)) && paidByPartnerId !== 'LOKESH') partnerSet.add(paidByPartnerId);
+  });
+
+  // Preserve official partners order first, then any extra dynamically discovered partners
+  const sortedPartners: string[] = [];
+  OFFICIAL_PARTNERS.forEach((p) => {
+    if (partnerSet.has(p)) {
+      sortedPartners.push(p);
+      partnerSet.delete(p);
+    }
+  });
+  Array.from(partnerSet)
+    .sort((a, b) => a.localeCompare(b))
+    .forEach((p) => sortedPartners.push(p));
+
+  return sortedPartners.map((partnerName) => {
+    // 1. Partner Balance (Unpaid balance owed by or attributed to this partner)
+    const partnerBalance = incomeList.reduce((sum, inc) => {
       const bal = Number(inc.balance) || 0;
       if (bal <= 0) return sum;
 
@@ -105,7 +139,7 @@ export const calculatePartnerTotals = (
       return sum;
     }, 0);
 
-    // 2. Expense by Them (Expenses paid by this partner)
+    // 2. Partner Expenses (Expenses paid by this partner)
     const expensesByThem = expenseList.reduce((sum, exp) => {
       const paidBy = (exp.paidBy || '').trim();
       const paidByPartnerId = (exp.paidByPartnerId || '').toString().trim();
@@ -116,10 +150,15 @@ export const calculatePartnerTotals = (
       return sum;
     }, 0);
 
+    // 3. Partner To Hotel = Partner Balance - Partner Expenses
+    const toHotel = partnerBalance - expensesByThem;
+
     return {
       partner: partnerName,
-      balanceToHotel,
+      partnerBalance,
       expensesByThem,
+      toHotel,
+      balanceToHotel: toHotel,
     };
   });
 };
@@ -268,10 +307,10 @@ const formatExpenseName = (exp: ExpenseRecord): string => {
  * - Opening Balance (Date): Rs. XXXXX
  * - Total Income: Rs. XXXXX
  * - Total Paid: Rs. XXXXX
- * - Total Balance: Rs. XXXXX
+ * - TOTAL BALANCE AMOUNT: Rs. XXXXX
  * - Total Expense: Rs. XXXXX
  * - Closing Balance (Date): Rs. XXXXX
- * - IRSHAD BALANCE: Rs. XXXXX
+ * - IRSHAD TO HOTEL: Rs. XXXXX
  */
 const drawSummaryBox = (
   doc: jsPDF,
@@ -284,7 +323,7 @@ const drawSummaryBox = (
   totalExpense: number,
   closingBalance: number,
   closingDateStr: string,
-  irshadBalance: number,
+  irshadToHotel: number,
   fontFamily: string,
   leftMargin: number,
   contentWidth: number,
@@ -347,14 +386,14 @@ const drawSummaryBox = (
   doc.setTextColor(22, 101, 52); // Green
   doc.text(formatPdfCurrency(totalPaid), leftMargin + contentWidth - 8, row1Y, { align: 'right' });
 
-  // Row 2: Total Balance, Total Expense, Closing Balance
+  // Row 2: TOTAL BALANCE AMOUNT, Total Expense, Closing Balance
   const row2Y = y + 42;
 
-  // 4. Total Balance
+  // 4. TOTAL BALANCE AMOUNT
   doc.setFont(fontFamily, 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(7.0);
   doc.setTextColor(70, 70, 70);
-  doc.text('Total Balance:', leftMargin + 6, row2Y);
+  doc.text('TOTAL BALANCE AMOUNT:', leftMargin + 6, row2Y);
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(180, 24, 24); // Red
@@ -380,7 +419,7 @@ const drawSummaryBox = (
   doc.setTextColor(180, 130, 20); // Warm Gold / Black
   doc.text(formatPdfCurrency(closingBalance), leftMargin + contentWidth - 8, row2Y, { align: 'right' });
 
-  // Row 3: Prominent IRSHAD BALANCE Highlight
+  // Row 3: Prominent IRSHAD TO HOTEL Highlight
   doc.setFillColor(250, 245, 230); // Soft luxury gold tint
   doc.setDrawColor(212, 175, 55); // Gold border
   doc.setLineWidth(0.8);
@@ -389,16 +428,16 @@ const drawSummaryBox = (
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(180, 24, 24); // Noticeable bold contrast
-  doc.text(`IRSHAD BALANCE: ${formatPdfCurrency(irshadBalance)}`, leftMargin + contentWidth / 2, y + 64.5, { align: 'center' });
+  doc.text(`IRSHAD TO HOTEL: ${formatPdfCurrency(irshadToHotel)}`, leftMargin + contentWidth / 2, y + 64.5, { align: 'center' });
 
   return y + summaryBoxHeight;
 };
 
 /**
  * Draw Compact Partner Calculation Grid on a NEW A4 PAGE
- * ONLY displays partners where balanceToHotel > 0 OR expensesByThem > 0
+ * ONLY displays partners where toHotel !== 0 OR partnerBalance > 0 OR expensesByThem > 0
  * NO labels ("Balance to Hotel", "Expense by Them")
- * First row = RED (Balance to Hotel)
+ * First row = RED (Partner To Hotel: Balance - Expenses)
  * Second row = GREEN (Expense by Them)
  */
 const drawPartnerCalculationSection = (
@@ -433,9 +472,9 @@ const drawPartnerCalculationSection = (
   doc.line(leftMargin, y, doc.internal.pageSize.getWidth() - rightMargin, y);
   y += 14;
 
-  // Filter: ONLY display partners with non-zero values
+  // Filter: ONLY display partners with active values
   const activePartners = allPartnerTotals.filter(
-    (p) => (p.balanceToHotel || 0) > 0 || (p.expensesByThem || 0) > 0
+    (p) => (p.toHotel || 0) !== 0 || (p.partnerBalance || 0) !== 0 || (p.expensesByThem || 0) !== 0
   );
 
   if (activePartners.length === 0) {
@@ -448,9 +487,11 @@ const drawPartnerCalculationSection = (
   }
 
   // Compact table with equal columns for active partners
+  // Row 1 = Partner To Hotel (Partner Balance - Partner Expenses) -> RED
+  // Row 2 = Expense by Them -> GREEN
   const head = [activePartners.map((p) => p.partner)];
   const body = [
-    activePartners.map((p) => formatPdfCurrency(p.balanceToHotel)),
+    activePartners.map((p) => formatPdfCurrency(p.toHotel)),
     activePartners.map((p) => formatPdfCurrency(p.expensesByThem)),
   ];
 
@@ -494,7 +535,7 @@ const drawPartnerCalculationSection = (
     didParseCell: (data) => {
       if (data.section === 'body') {
         if (data.row.index === 0) {
-          // Row 1: Balance to Hotel -> RED
+          // Row 1: Partner To Hotel (Balance - Expenses) -> RED
           data.cell.styles.textColor = [190, 24, 24];
           data.cell.styles.fontStyle = 'bold';
         } else if (data.row.index === 1) {
@@ -720,8 +761,8 @@ export const generateDailyAccountsPdf = (
 
   // 1. Calculate partner totals
   const partnerTotals = calculatePartnerTotals(todayIncome, todayExpenses);
-  const irshadData = partnerTotals.find((p) => p.partner === 'IRSHAD');
-  const irshadBalance = irshadData ? irshadData.balanceToHotel : 0;
+  const irshadData = partnerTotals.find((p) => p.partner.toUpperCase() === 'IRSHAD');
+  const irshadToHotel = irshadData ? irshadData.toHotel : 0;
 
   // 2. Draw Summary Box after ledger table
   currentY = drawSummaryBox(
@@ -735,7 +776,7 @@ export const generateDailyAccountsPdf = (
     totalExpense,
     closingBalance,
     dateFormattedMedium,
-    irshadBalance,
+    irshadToHotel,
     fontFamily,
     leftMargin,
     contentWidth,
@@ -960,8 +1001,8 @@ export const generateMonthlyAccountsPdf = (
 
   // 1. Calculate partner totals
   const partnerTotals = calculatePartnerTotals(monthIncome, monthExpenses);
-  const irshadData = partnerTotals.find((p) => p.partner === 'IRSHAD');
-  const irshadBalance = irshadData ? irshadData.balanceToHotel : 0;
+  const irshadData = partnerTotals.find((p) => p.partner.toUpperCase() === 'IRSHAD');
+  const irshadToHotel = irshadData ? irshadData.toHotel : 0;
 
   // 2. Draw Summary Box after ledger table
   currentY = drawSummaryBox(
@@ -975,7 +1016,7 @@ export const generateMonthlyAccountsPdf = (
     totalExpense,
     closingBalance,
     lastDateFormatted,
-    irshadBalance,
+    irshadToHotel,
     fontFamily,
     leftMargin,
     contentWidth,
