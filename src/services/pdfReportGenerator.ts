@@ -303,14 +303,11 @@ const formatExpenseName = (exp: ExpenseRecord): string => {
 
 /**
  * Draw Summary Container
- * Displaying:
- * - Opening Balance (Date): Rs. XXXXX
- * - Total Income: Rs. XXXXX
- * - Total Paid: Rs. XXXXX
- * - TOTAL BALANCE AMOUNT: Rs. XXXXX
- * - Total Expense: Rs. XXXXX
- * - Closing Balance (Date): Rs. XXXXX
- * - IRSHAD TO HOTEL: Rs. XXXXX
+ * Displaying clean 2-column grid:
+ * Row 1: Opening Balance (left) | Total Income (right)
+ * Row 2: Received (left)        | Total Expense (right)
+ * Row 3: CLOSING BALANCE (date): Rs. XXX (Full-width green box)
+ * Row 4: IRSHAD TO HOTEL: Rs. XXX (Full-width gold/red box)
  */
 const drawSummaryBox = (
   doc: jsPDF,
@@ -319,7 +316,6 @@ const drawSummaryBox = (
   openingDateStr: string,
   totalIncome: number,
   totalPaid: number,
-  totalBalance: number,
   totalExpense: number,
   closingBalance: number,
   closingDateStr: string,
@@ -330,12 +326,12 @@ const drawSummaryBox = (
   pageHeight: number
 ): number => {
   let y = startY;
-  const summaryBoxHeight = 88;
+  const summaryBoxHeight = 84;
 
-  // Space check: ensure room for summary box before bottom footer
-  if (y + summaryBoxHeight > pageHeight - 35) {
+  // Space check: ensure room for summary box before bottom footer line
+  if (y + summaryBoxHeight > pageHeight - 26) {
     doc.addPage();
-    y = 38;
+    y = 36;
   }
 
   // Summary Container (Clean, luxury black/gold border)
@@ -352,69 +348,59 @@ const drawSummaryBox = (
   doc.setTextColor(10, 10, 10);
   doc.text('SUMMARY', leftMargin + 6, y + 9.5);
 
-  // Row 1: Opening Balance, Total Income, Received (Total Paid)
-  const row1Y = y + 23;
-  const colW3 = contentWidth / 3;
+  const colW2 = contentWidth / 2;
+
+  // Row 1: Opening Balance (Left Col) & Total Income (Right Col)
+  const row1Y = y + 22;
 
   // 1. Opening Balance (Date)
   doc.setFont(fontFamily, 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(8.0);
   doc.setTextColor(70, 70, 70);
-  doc.text(`Opening Balance (${openingDateStr}):`, leftMargin + 6, row1Y);
+  doc.text(`Opening Balance (${openingDateStr}):`, leftMargin + 10, row1Y);
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(8.5);
+  doc.setFontSize(9.0);
   doc.setTextColor(20, 20, 20);
-  doc.text(formatPdfCurrency(openingBalance), leftMargin + colW3 - 8, row1Y, { align: 'right' });
+  doc.text(formatPdfCurrency(openingBalance), leftMargin + colW2 - 14, row1Y, { align: 'right' });
 
   // 2. Total Income
   doc.setFont(fontFamily, 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(8.0);
   doc.setTextColor(70, 70, 70);
-  doc.text('Total Income:', leftMargin + colW3 + 8, row1Y);
+  doc.text('Total Income:', leftMargin + colW2 + 14, row1Y);
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(8.5);
+  doc.setFontSize(9.0);
   doc.setTextColor(22, 101, 52); // Green
-  doc.text(formatPdfCurrency(totalIncome), leftMargin + colW3 * 2 - 8, row1Y, { align: 'right' });
+  doc.text(formatPdfCurrency(totalIncome), leftMargin + contentWidth - 14, row1Y, { align: 'right' });
+
+  // Row 2: Received (Left Col) & Total Expense (Right Col)
+  const row2Y = y + 36;
 
   // 3. Received (Total Paid)
   doc.setFont(fontFamily, 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(8.0);
   doc.setTextColor(70, 70, 70);
-  doc.text('Received:', leftMargin + colW3 * 2 + 8, row1Y);
+  doc.text('Received:', leftMargin + 10, row2Y);
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(8.5);
+  doc.setFontSize(9.0);
   doc.setTextColor(22, 101, 52); // Green
-  doc.text(formatPdfCurrency(totalPaid), leftMargin + contentWidth - 8, row1Y, { align: 'right' });
+  doc.text(formatPdfCurrency(totalPaid), leftMargin + colW2 - 14, row2Y, { align: 'right' });
 
-  // Row 2: TOTAL BALANCE AMOUNT, Total Expense (Spaced across 2 balanced columns)
-  const row2Y = y + 36;
-  const colW2 = contentWidth / 2;
-
-  // 4. TOTAL BALANCE AMOUNT
+  // 4. Total Expense
   doc.setFont(fontFamily, 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(8.0);
   doc.setTextColor(70, 70, 70);
-  doc.text('TOTAL BALANCE AMOUNT:', leftMargin + 6, row2Y);
+  doc.text('Total Expense:', leftMargin + colW2 + 14, row2Y);
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(8.5);
+  doc.setFontSize(9.0);
   doc.setTextColor(180, 24, 24); // Red
-  doc.text(formatPdfCurrency(totalBalance), leftMargin + colW2 - 12, row2Y, { align: 'right' });
-
-  // 5. Total Expense
-  doc.setFont(fontFamily, 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(70, 70, 70);
-  doc.text('Total Expense:', leftMargin + colW2 + 12, row2Y);
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(180, 24, 24); // Red
-  doc.text(formatPdfCurrency(totalExpense), leftMargin + contentWidth - 8, row2Y, { align: 'right' });
+  doc.text(formatPdfCurrency(totalExpense), leftMargin + contentWidth - 14, row2Y, { align: 'right' });
 
   // Row 3: Prominent CLOSING BALANCE Full-Width Green Highlight Box
   doc.setFillColor(240, 253, 244); // Soft pale green tint
   doc.setDrawColor(22, 101, 52); // Dark bold green border
   doc.setLineWidth(0.8);
-  doc.roundedRect(leftMargin + 6, y + 46, contentWidth - 12, 14, 1.5, 1.5, 'FD');
+  doc.roundedRect(leftMargin + 6, y + 48, contentWidth - 12, 14, 1.5, 1.5, 'FD');
 
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(9.5);
@@ -422,7 +408,7 @@ const drawSummaryBox = (
   doc.text(
     `CLOSING BALANCE (${closingDateStr}): ${formatPdfCurrency(closingBalance)}`,
     leftMargin + contentWidth / 2,
-    y + 55.5,
+    y + 57.5,
     { align: 'center' }
   );
 
@@ -784,7 +770,6 @@ export const generateDailyAccountsPdf = (
     dateFormattedMedium,
     totalIncome,
     totalPaid,
-    totalBalance,
     totalExpense,
     closingBalance,
     dateFormattedMedium,
@@ -795,17 +780,7 @@ export const generateDailyAccountsPdf = (
     pageHeight
   );
 
-  // 3. Draw Partner Calculation Section after summary (always starts on a new A4 page)
-  drawPartnerCalculationSection(
-    doc,
-    partnerTotals,
-    fontFamily,
-    leftMargin,
-    rightMargin,
-    contentWidth
-  );
-
-  // 3. Draw Page Numbers and Headers across all generated pages
+  // 3. Draw Page Numbers and Headers across generated page
   drawPageHeaderAndFooter(doc, fontFamily, pageWidth, pageHeight, leftMargin, rightMargin);
 
   return doc;
@@ -1024,7 +999,6 @@ export const generateMonthlyAccountsPdf = (
     firstDateFormatted,
     totalIncome,
     totalPaid,
-    totalBalance,
     totalExpense,
     closingBalance,
     lastDateFormatted,
@@ -1033,16 +1007,6 @@ export const generateMonthlyAccountsPdf = (
     leftMargin,
     contentWidth,
     pageHeight
-  );
-
-  // 3. Draw Partner Calculation Section after summary (always starts on a new A4 page)
-  drawPartnerCalculationSection(
-    doc,
-    partnerTotals,
-    fontFamily,
-    leftMargin,
-    rightMargin,
-    contentWidth
   );
 
   // 3. Draw Page Numbers and Headers across all generated pages
