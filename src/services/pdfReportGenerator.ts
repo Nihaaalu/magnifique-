@@ -330,7 +330,7 @@ const drawSummaryBox = (
   pageHeight: number
 ): number => {
   let y = startY;
-  const summaryBoxHeight = 74;
+  const summaryBoxHeight = 88;
 
   // Space check: ensure room for summary box before bottom footer
   if (y + summaryBoxHeight > pageHeight - 35) {
@@ -352,9 +352,9 @@ const drawSummaryBox = (
   doc.setTextColor(10, 10, 10);
   doc.text('SUMMARY', leftMargin + 6, y + 9.5);
 
-  // Row 1: Opening Balance, Total Income, Total Paid
-  const row1Y = y + 25;
-  const colW = contentWidth / 3;
+  // Row 1: Opening Balance, Total Income, Received (Total Paid)
+  const row1Y = y + 23;
+  const colW3 = contentWidth / 3;
 
   // 1. Opening Balance (Date)
   doc.setFont(fontFamily, 'normal');
@@ -364,71 +364,83 @@ const drawSummaryBox = (
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(20, 20, 20);
-  doc.text(formatPdfCurrency(openingBalance), leftMargin + colW - 8, row1Y, { align: 'right' });
+  doc.text(formatPdfCurrency(openingBalance), leftMargin + colW3 - 8, row1Y, { align: 'right' });
 
   // 2. Total Income
   doc.setFont(fontFamily, 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(70, 70, 70);
-  doc.text('Total Income:', leftMargin + colW + 12, row1Y);
+  doc.text('Total Income:', leftMargin + colW3 + 8, row1Y);
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(22, 101, 52); // Green
-  doc.text(formatPdfCurrency(totalIncome), leftMargin + colW * 2 - 8, row1Y, { align: 'right' });
+  doc.text(formatPdfCurrency(totalIncome), leftMargin + colW3 * 2 - 8, row1Y, { align: 'right' });
 
   // 3. Received (Total Paid)
   doc.setFont(fontFamily, 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(70, 70, 70);
-  doc.text('Received:', leftMargin + colW * 2 + 12, row1Y);
+  doc.text('Received:', leftMargin + colW3 * 2 + 8, row1Y);
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(22, 101, 52); // Green
   doc.text(formatPdfCurrency(totalPaid), leftMargin + contentWidth - 8, row1Y, { align: 'right' });
 
-  // Row 2: TOTAL BALANCE AMOUNT, Total Expense, Closing Balance
-  const row2Y = y + 42;
+  // Row 2: TOTAL BALANCE AMOUNT, Total Expense (Spaced across 2 balanced columns)
+  const row2Y = y + 36;
+  const colW2 = contentWidth / 2;
 
   // 4. TOTAL BALANCE AMOUNT
   doc.setFont(fontFamily, 'normal');
-  doc.setFontSize(7.0);
+  doc.setFontSize(7.5);
   doc.setTextColor(70, 70, 70);
   doc.text('TOTAL BALANCE AMOUNT:', leftMargin + 6, row2Y);
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(180, 24, 24); // Red
-  doc.text(formatPdfCurrency(totalBalance), leftMargin + colW - 8, row2Y, { align: 'right' });
+  doc.text(formatPdfCurrency(totalBalance), leftMargin + colW2 - 12, row2Y, { align: 'right' });
 
   // 5. Total Expense
   doc.setFont(fontFamily, 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(70, 70, 70);
-  doc.text('Total Expense:', leftMargin + colW + 12, row2Y);
+  doc.text('Total Expense:', leftMargin + colW2 + 12, row2Y);
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(180, 24, 24); // Red
-  doc.text(formatPdfCurrency(totalExpense), leftMargin + colW * 2 - 8, row2Y, { align: 'right' });
+  doc.text(formatPdfCurrency(totalExpense), leftMargin + contentWidth - 8, row2Y, { align: 'right' });
 
-  // 6. Closing Balance (Date)
-  doc.setFont(fontFamily, 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(70, 70, 70);
-  doc.text(`Closing Balance (${closingDateStr}):`, leftMargin + colW * 2 + 12, row2Y);
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(180, 130, 20); // Warm Gold / Black
-  doc.text(formatPdfCurrency(closingBalance), leftMargin + contentWidth - 8, row2Y, { align: 'right' });
-
-  // Row 3: Prominent IRSHAD TO HOTEL Highlight
-  doc.setFillColor(250, 245, 230); // Soft luxury gold tint
-  doc.setDrawColor(212, 175, 55); // Gold border
+  // Row 3: Prominent CLOSING BALANCE Full-Width Green Highlight Box
+  doc.setFillColor(240, 253, 244); // Soft pale green tint
+  doc.setDrawColor(22, 101, 52); // Dark bold green border
   doc.setLineWidth(0.8);
-  doc.roundedRect(leftMargin + 6, y + 54, contentWidth - 12, 15, 1.5, 1.5, 'FD');
+  doc.roundedRect(leftMargin + 6, y + 46, contentWidth - 12, 14, 1.5, 1.5, 'FD');
 
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(9.5);
-  doc.setTextColor(180, 24, 24); // Noticeable bold contrast
-  doc.text(`IRSHAD TO HOTEL: ${formatPdfCurrency(irshadToHotel)}`, leftMargin + contentWidth / 2, y + 64.5, { align: 'center' });
+  doc.setTextColor(22, 101, 52); // Dark Bold Green for entire text and amount
+  doc.text(
+    `CLOSING BALANCE (${closingDateStr}): ${formatPdfCurrency(closingBalance)}`,
+    leftMargin + contentWidth / 2,
+    y + 55.5,
+    { align: 'center' }
+  );
+
+  // Row 4: Prominent IRSHAD TO HOTEL Full-Width Gold/Red Highlight Box
+  doc.setFillColor(250, 245, 230); // Soft luxury gold tint
+  doc.setDrawColor(212, 175, 55); // Gold border
+  doc.setLineWidth(0.8);
+  doc.roundedRect(leftMargin + 6, y + 65, contentWidth - 12, 14, 1.5, 1.5, 'FD');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(180, 24, 24); // Bold red contrast
+  doc.text(
+    `IRSHAD TO HOTEL: ${formatPdfCurrency(irshadToHotel)}`,
+    leftMargin + contentWidth / 2,
+    y + 74.5,
+    { align: 'center' }
+  );
 
   return y + summaryBoxHeight;
 };
