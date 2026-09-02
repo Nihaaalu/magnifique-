@@ -38,7 +38,7 @@ import { ExpenseTab } from './components/ExpenseTab';
 import { PartnerTab } from './components/PartnerTab';
 import { AnalyticsTab } from './components/AnalyticsTab';
 import { AppLockScreen } from './components/AppLockScreen';
-import { AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes in milliseconds
 const UNLOCKED_STORAGE_KEY = 'magnifique_app_unlocked';
@@ -47,9 +47,8 @@ const LAST_ACTIVITY_STORAGE_KEY = 'magnifique_last_activity';
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('income');
 
-  // Application Lock State (Browser-local with 30-minute inactivity timeout)
+  // Application Lock State: strictly locked on startup and full browser page reload
   const [isLocked, setIsLocked] = useState<boolean>(true);
-  const [isCheckingLock, setIsCheckingLock] = useState<boolean>(true);
 
   // Supabase State
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -63,34 +62,24 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Check initial app lock status on startup/reload from browser storage
+  // Ensure any persistent unlock token is cleared on full browser reload or page unload
   useEffect(() => {
     try {
-      const isUnlocked = localStorage.getItem(UNLOCKED_STORAGE_KEY) === 'true';
-      const lastActivityStr = localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY);
-      const lastActivity = lastActivityStr ? parseInt(lastActivityStr, 10) : 0;
-      const now = Date.now();
+      localStorage.removeItem(UNLOCKED_STORAGE_KEY);
+      sessionStorage.removeItem(UNLOCKED_STORAGE_KEY);
+    } catch {}
 
-      // If unlocked and active within the last 30 minutes, keep unlocked across page refresh
-      if (
-        isUnlocked &&
-        lastActivity > 0 &&
-        now - lastActivity < INACTIVITY_TIMEOUT_MS &&
-        now >= lastActivity
-      ) {
-        setIsLocked(false);
-      } else {
-        // Inactive for 30+ minutes or not unlocked
+    const handleBeforeUnload = () => {
+      try {
         localStorage.removeItem(UNLOCKED_STORAGE_KEY);
-        localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
-        setIsLocked(true);
-      }
-    } catch (err) {
-      console.error('Failed to read lock state from localStorage:', err);
-      setIsLocked(true);
-    } finally {
-      setIsCheckingLock(false);
-    }
+        sessionStorage.removeItem(UNLOCKED_STORAGE_KEY);
+      } catch {}
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
   }, []);
 
   // 30-minute Inactivity Detection & User Interaction Tracker
@@ -113,10 +102,9 @@ export default function App() {
       }
     };
 
-    // Ensure last activity and unlock flags are set on active session
+    // Ensure last activity timestamp is set on active session
     try {
       localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
-      localStorage.setItem(UNLOCKED_STORAGE_KEY, 'true');
     } catch {}
 
     // Valid user interactions across desktop and mobile devices:
@@ -421,10 +409,11 @@ export default function App() {
   const handleUnlock = () => {
     try {
       const now = Date.now();
-      localStorage.setItem(UNLOCKED_STORAGE_KEY, 'true');
+      localStorage.removeItem(UNLOCKED_STORAGE_KEY);
+      sessionStorage.removeItem(UNLOCKED_STORAGE_KEY);
       localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, now.toString());
     } catch (e) {
-      console.error('Failed to save unlock state to localStorage:', e);
+      console.error('Failed to update activity timestamp:', e);
     }
     setIsLocked(false);
   };
@@ -432,6 +421,7 @@ export default function App() {
   const handleLockApp = () => {
     try {
       localStorage.removeItem(UNLOCKED_STORAGE_KEY);
+      sessionStorage.removeItem(UNLOCKED_STORAGE_KEY);
       localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
     } catch (e) {
       console.error('Failed to clear unlock state from localStorage:', e);
@@ -439,27 +429,7 @@ export default function App() {
     setIsLocked(true);
   };
 
-  // If checking initial lock status, display clean dark splash loader
-  if (isCheckingLock) {
-    return (
-      <div className="min-h-screen bg-[#0A0A0A] flex flex-col items-center justify-center space-y-3 text-[#F5F5F5]">
-        <div className="text-center space-y-1">
-          <h1 className="text-xl font-black text-[#F5F5F5] tracking-widest uppercase">
-            MAGNIFIQUE <span className="text-[#D4AF37]">2.0</span>
-          </h1>
-          <p className="text-xs text-[#777777] font-medium tracking-wide">
-            Restaurant Accounts
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-[#D4AF37] pt-2">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          <span>Loading...</span>
-        </div>
-      </div>
-    );
-  }
-
-  // If locked, render the full application lock screen before showing the main application
+  // If locked (including on any full browser reload/refresh), render the full application lock screen
   if (isLocked) {
     return <AppLockScreen onUnlock={handleUnlock} />;
   }
