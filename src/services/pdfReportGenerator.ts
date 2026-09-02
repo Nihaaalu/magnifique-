@@ -949,27 +949,45 @@ export const generateMonthlyAccountsPdf = (
         ]);
       }
 
-      // Check remaining page space for Date Label + Table Header + at least 1 row (~52pt)
-      if (currentY + 52 > pageHeight - 32) {
+      // Calculate daily total income and expense for this specific date ONLY
+      const dayTotalIncome = dayIncome.reduce((sum, r) => sum + (Number(r.total) || 0), 0);
+      const dayTotalExpense = dayExpenses.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+
+      // Append daily total row immediately after this day's ledger entries
+      dayBody.push([
+        'TOTAL INCOME:',
+        '',
+        '',
+        '',
+        formatPdfCurrency(dayTotalIncome),
+        'TOTAL EXPENSE:',
+        '',
+        formatPdfCurrency(dayTotalExpense),
+      ]);
+
+      // Check remaining page space for Date Label + Table Header + at least 1 row (~54pt)
+      if (currentY + 54 > pageHeight - 32) {
         doc.addPage();
         currentY = 36;
       }
 
-      // Date Label Header (e.g. "1 SEP")
+      // Date Label Header (e.g. "1 SEPT • 01 Sept 2026") - Noticeably Bolder & Larger
       const dayHeader = formatDayHeader(dateStr);
       const fullDateMedium = formatPdfDateMedium(dateStr);
 
       doc.setFont(fontFamily, 'bold');
-      doc.setFontSize(8.5);
+      doc.setFontSize(10.5);
       doc.setTextColor(180, 130, 20); // Warm Gold
-      doc.text(dayHeader, leftMargin, currentY + 5);
+      doc.text(dayHeader, leftMargin, currentY + 6);
 
-      doc.setFont(fontFamily, 'normal');
-      doc.setFontSize(7.5);
-      doc.setTextColor(110, 110, 110);
-      doc.text(`•  ${fullDateMedium}`, leftMargin + doc.getTextWidth(dayHeader) + 6, currentY + 5);
+      const dayHeaderWidth = doc.getTextWidth(dayHeader);
 
-      currentY += 9;
+      doc.setFont(fontFamily, 'bold');
+      doc.setFontSize(9.5);
+      doc.setTextColor(40, 40, 40); // Noticeably bold dark gray/black
+      doc.text(`•  ${fullDateMedium}`, leftMargin + dayHeaderWidth + 6, currentY + 6);
+
+      currentY += 10;
 
       autoTable(doc, {
         head: tableHead as any,
@@ -1007,6 +1025,15 @@ export const generateMonthlyAccountsPdf = (
           5: { cellWidth: 103 }, // Expense DESCRIPTION
           6: { cellWidth: 56 }, // Expense PAID BY
           7: { cellWidth: 58, halign: 'right', fontStyle: 'bold' }, // Expense AMOUNT
+        },
+        didParseCell: (data) => {
+          // Visually dark daily total row before next date begins
+          if (data.section === 'body' && data.row.index === dayBody.length - 1) {
+            data.cell.styles.fillColor = [30, 30, 30]; // Visually dark row background
+            data.cell.styles.textColor = [255, 255, 255]; // Crisp white text
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fontSize = 7;
+          }
         },
         didDrawCell: (data) => {
           // Thicker vertical divider between INCOME (col 0-4) and EXPENSE (col 5-7)
