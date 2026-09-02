@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   IncomeRecord,
   ExpenseRecord,
   Partner,
+  PartnerSettlement,
   PaymentStatus,
   MealPlan,
   MealCombination,
 } from '../types';
+import { calculatePartnerNetBalances } from '../utils/partnerBalanceUtils';
 import {
   LedgerPeriodMode,
   DateRange,
@@ -41,6 +43,7 @@ interface IncomeLedgerProps {
   incomeRecords: IncomeRecord[];
   expenseRecords: ExpenseRecord[];
   partners?: Partner[];
+  partnerSettlements?: PartnerSettlement[];
   onDeleteIncome: (id: string) => void | Promise<void>;
   onUpdateIncome?: (id: string, updatedRecord: Partial<IncomeRecord>) => void | Promise<void>;
   onSettleIncome?: (incomeEntryId: string, paymentDate: string, amount: number) => Promise<void>;
@@ -53,6 +56,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   incomeRecords,
   expenseRecords,
   partners = [],
+  partnerSettlements = [],
   onDeleteIncome,
   onUpdateIncome,
   onSettleIncome,
@@ -179,6 +183,42 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     );
     periodTotalExpense = customExpenses.reduce((sum, r) => sum + r.amount, 0);
   }
+
+  // Running partner balance continuing previous day's balance
+  const partnerBalances = useMemo(() => {
+    let cutoff = selectedDay;
+    let start = selectedDay;
+    if (periodMode === 'month') {
+      const monthStr = `${selectedMonth.year}-${String(selectedMonth.month).padStart(2, '0')}`;
+      cutoff = `${monthStr}-31`;
+      start = `${monthStr}-01`;
+    } else if (periodMode === 'week') {
+      const range = getWeekRange(selectedWeekRef);
+      cutoff = range.endDate;
+      start = range.startDate;
+    } else if (periodMode === 'custom') {
+      cutoff = appliedCustomRange.endDate;
+      start = appliedCustomRange.startDate;
+    }
+
+    return calculatePartnerNetBalances(
+      incomeRecords,
+      expenseRecords,
+      partnerSettlements,
+      partners,
+      { cutoffDate: cutoff, startDate: start }
+    ).filter((pb) => !pb.isZero);
+  }, [
+    periodMode,
+    selectedDay,
+    selectedMonth,
+    selectedWeekRef,
+    appliedCustomRange,
+    incomeRecords,
+    expenseRecords,
+    partnerSettlements,
+    partners,
+  ]);
 
   const sortedRecords = [...filteredIncome].sort((a, b) => {
     if (a.date !== b.date) {
@@ -713,6 +753,35 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Partner Running Balances: Displayed only if non-zero, continuing previous balances */}
+      {partnerBalances.length > 0 && (
+        <div
+          id="income-ledger-partner-balances"
+          className="px-3 py-2 bg-[#141414] border-b border-[#2A2A2A] flex flex-wrap items-center gap-2"
+        >
+          <span className="text-[10px] text-[#888888] font-bold uppercase tracking-wider mr-1">
+            Partner Balance:
+          </span>
+          {partnerBalances.map((pb) => (
+            <div
+              key={pb.partnerName}
+              className="px-2.5 py-1 rounded-md border text-xs font-black flex items-center gap-1.5"
+              style={{
+                backgroundColor:
+                  pb.direction === 'to_hotel'
+                    ? 'rgba(212, 175, 55, 0.1)'
+                    : 'rgba(74, 222, 128, 0.1)',
+                borderColor: pb.direction === 'to_hotel' ? '#D4AF37' : '#4ade80',
+                color: pb.direction === 'to_hotel' ? '#F2C94C' : '#4ade80',
+              }}
+            >
+              <span>{pb.displayLabel}:</span>
+              <span className="font-extrabold">{formatCurrency(pb.displayAmount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* List of Entries */}
       <div className="divide-y divide-[#2A2A2A]" id="income-records-list">

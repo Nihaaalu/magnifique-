@@ -24,6 +24,10 @@ import {
   MonthBalanceSummary,
 } from '../utils/accountBalanceUtils';
 import {
+  calculatePartnerBalancesForDate,
+  calculatePartnerBalancesForMonth,
+} from '../utils/partnerBalanceUtils';
+import {
   Download,
   Calculator,
   Loader2,
@@ -158,6 +162,29 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
     firstDate: `${selectedMonth}-01`,
     lastDate: `${selectedMonth}-30`,
   };
+
+  // Partner running balances for active date and selected report month
+  const dailyPartnerBalances = React.useMemo(() => {
+    if (!activeDate) return [];
+    return calculatePartnerBalancesForDate(
+      activeDate,
+      incomeRecords,
+      expenseRecords,
+      partnerSettlements,
+      partners
+    ).filter((pb) => !pb.isZero);
+  }, [activeDate, incomeRecords, expenseRecords, partnerSettlements, partners]);
+
+  const monthlyPartnerBalances = React.useMemo(() => {
+    if (!selectedReportMonth) return [];
+    return calculatePartnerBalancesForMonth(
+      selectedReportMonth,
+      incomeRecords,
+      expenseRecords,
+      partnerSettlements,
+      partners
+    ).filter((pb) => !pb.isZero);
+  }, [selectedReportMonth, incomeRecords, expenseRecords, partnerSettlements, partners]);
 
   // 1. Download Selected Daily Date Accounts as PDF
   const handleDownloadDaily = async () => {
@@ -434,6 +461,34 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 )}
               </button>
             </div>
+
+            {/* Daily Partner Running Balances (shown only if non-zero) */}
+            {dailyPartnerBalances.length > 0 && (
+              <div
+                id="daily-report-partner-balances"
+                className="pt-2 border-t border-[#222222] flex flex-wrap items-center gap-1.5"
+              >
+                <span className="text-[10px] text-[#777777] font-bold uppercase tracking-wider mr-1">
+                  Partner Balance:
+                </span>
+                {dailyPartnerBalances.map((pb) => (
+                  <span
+                    key={pb.partnerName}
+                    className="text-[11px] font-black px-2 py-0.5 rounded border"
+                    style={{
+                      backgroundColor:
+                        pb.direction === 'to_hotel'
+                          ? 'rgba(212, 175, 55, 0.1)'
+                          : 'rgba(74, 222, 128, 0.1)',
+                      borderColor: pb.direction === 'to_hotel' ? '#D4AF37' : '#4ade80',
+                      color: pb.direction === 'to_hotel' ? '#F2C94C' : '#4ade80',
+                    }}
+                  >
+                    {pb.displayLabel}: {formatCurrency(pb.displayAmount)}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 2. Monthly Accounts Selector */}
@@ -490,6 +545,34 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 )}
               </button>
             </div>
+
+            {/* Monthly Partner Running Balances (shown only if non-zero) */}
+            {monthlyPartnerBalances.length > 0 && (
+              <div
+                id="monthly-report-partner-balances"
+                className="pt-2 border-t border-[#222222] flex flex-wrap items-center gap-1.5"
+              >
+                <span className="text-[10px] text-[#777777] font-bold uppercase tracking-wider mr-1">
+                  Partner Balance:
+                </span>
+                {monthlyPartnerBalances.map((pb) => (
+                  <span
+                    key={pb.partnerName}
+                    className="text-[11px] font-black px-2 py-0.5 rounded border"
+                    style={{
+                      backgroundColor:
+                        pb.direction === 'to_hotel'
+                          ? 'rgba(212, 175, 55, 0.1)'
+                          : 'rgba(74, 222, 128, 0.1)',
+                      borderColor: pb.direction === 'to_hotel' ? '#D4AF37' : '#4ade80',
+                      color: pb.direction === 'to_hotel' ? '#F2C94C' : '#4ade80',
+                    }}
+                  >
+                    {pb.displayLabel}: {formatCurrency(pb.displayAmount)}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </section>

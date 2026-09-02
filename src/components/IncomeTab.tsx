@@ -6,6 +6,7 @@ import {
   IncomeRecord,
   ExpenseRecord,
   Partner,
+  PartnerSettlement,
   IncomeEntryRow,
 } from '../types';
 import {
@@ -18,6 +19,7 @@ interface IncomeTabProps {
   incomeRecords: IncomeRecord[];
   expenseRecords: ExpenseRecord[];
   partners: Partner[];
+  partnerSettlements?: PartnerSettlement[];
   onAddIncome: (record: Omit<IncomeEntryRow, 'id' | 'created_at' | 'updated_at'>) => Promise<void>;
   onDeleteIncome: (id: string) => Promise<void>;
   onUpdateIncome?: (id: string, updatedRecord: Partial<IncomeRecord>) => Promise<void>;
@@ -32,6 +34,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   incomeRecords,
   expenseRecords,
   partners,
+  partnerSettlements = [],
   onAddIncome,
   onDeleteIncome,
   onUpdateIncome,
@@ -1135,6 +1138,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
           incomeRecords={incomeRecords}
           expenseRecords={expenseRecords}
           partners={partners}
+          partnerSettlements={partnerSettlements}
           onDeleteIncome={onDeleteIncome}
           onUpdateIncome={onUpdateIncome}
           onSettleIncome={onSettleIncome}

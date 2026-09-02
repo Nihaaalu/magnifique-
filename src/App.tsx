@@ -506,6 +506,7 @@ export default function App() {
             incomeRecords={incomeRecords}
             expenseRecords={expenseRecords}
             partners={partners}
+            partnerSettlements={partnerSettlements}
             onAddIncome={handleAddIncome}
             onDeleteIncome={handleDeleteIncome}
             onUpdateIncome={handleUpdateIncome}

@@ -48,7 +48,8 @@ export function matchPartner(
   targetPartnerName: string,
   targetPartnerId: string | undefined,
   candidateName: string | null | undefined,
-  candidateId: string | number | null | undefined
+  candidateId: string | number | null | undefined,
+  idToNameMap?: Map<string, string>
 ): boolean {
   const normTargetName = normalizePartnerName(targetPartnerName);
   if (!normTargetName) return false;
@@ -66,7 +67,14 @@ export function matchPartner(
     if (normCandName && normCandName === normTargetName) return true;
   }
 
-  // 3. In some legacy rows, candidateId contains the partner's name string
+  // 3. ID to Name lookup via map
+  if (candidateId && idToNameMap) {
+    const cId = String(candidateId).trim().toUpperCase();
+    const mappedName = idToNameMap.get(cId);
+    if (mappedName && normalizePartnerName(mappedName) === normTargetName) return true;
+  }
+
+  // 4. In some legacy rows, candidateId contains the partner's name string
   if (candidateId) {
     const normCandId = normalizePartnerName(String(candidateId));
     if (normCandId && normCandId === normTargetName) return true;
@@ -81,7 +89,8 @@ export function matchPartner(
 export function isIncomeAssignedToPartner(
   inc: IncomeRecord,
   partnerName: string,
-  partnerId?: string
+  partnerId?: string,
+  idToNameMap?: Map<string, string>
 ): boolean {
   const normName = normalizePartnerName(partnerName);
   // Check balanceAccountPartnerName and balanceAccountPartnerId first
@@ -90,12 +99,13 @@ export function isIncomeAssignedToPartner(
       normName,
       partnerId,
       inc.balanceAccountPartnerName,
-      inc.balanceAccountPartnerId
+      inc.balanceAccountPartnerId,
+      idToNameMap
     );
   }
   // Fallback to byWho
   if (inc.byWho) {
-    return matchPartner(normName, partnerId, inc.byWho, null);
+    return matchPartner(normName, partnerId, inc.byWho, null, idToNameMap);
   }
   return false;
 }
@@ -106,10 +116,11 @@ export function isIncomeAssignedToPartner(
 export function isExpensePaidByPartner(
   exp: ExpenseRecord,
   partnerName: string,
-  partnerId?: string
+  partnerId?: string,
+  idToNameMap?: Map<string, string>
 ): boolean {
   const normName = normalizePartnerName(partnerName);
-  return matchPartner(normName, partnerId, exp.paidBy, exp.paidByPartnerId);
+  return matchPartner(normName, partnerId, exp.paidBy, exp.paidByPartnerId, idToNameMap);
 }
 
 /**
@@ -118,12 +129,13 @@ export function isExpensePaidByPartner(
 export function isSettlementForPartner(
   s: any,
   partnerName: string,
-  partnerId?: string
+  partnerId?: string,
+  idToNameMap?: Map<string, string>
 ): boolean {
   const normName = normalizePartnerName(partnerName);
   const sName = s.partnerName || s.partner_name || s.name || s.partner;
   const sId = s.partnerId || s.partner_id;
-  return matchPartner(normName, partnerId, sName, sId);
+  return matchPartner(normName, partnerId, sName, sId, idToNameMap);
 }
 
 /**
@@ -192,7 +204,7 @@ export function getEffectivePartners(
 ): { id?: string; name: string }[] {
   const map = new Map<string, { id?: string; name: string }>();
 
-  // 1. Seed with the 5 official partners
+  // 1. Seed strictly with the 5 official partners
   OFFICIAL_PARTNER_NAMES.forEach((name) => {
     map.set(name, { name });
   });
@@ -200,62 +212,46 @@ export function getEffectivePartners(
   // 2. Incorporate existing database partners
   partners.forEach((p) => {
     const norm = normalizePartnerName(p.name);
-    if (norm && norm !== 'LOKESH' && norm !== 'HOTEL' && norm !== 'CASH') {
-      const existing = map.get(norm);
-      map.set(norm, { id: p.id ? String(p.id) : existing?.id, name: norm });
+    if (map.has(norm)) {
+      map.set(norm, { id: p.id ? String(p.id) : undefined, name: norm });
     }
   });
 
-  // 3. Scan income entries for extra partners
+  // 3. Scan income entries for extra partners if missing IDs
   incomeRecords.forEach((inc) => {
     const pName = normalizePartnerName(inc.balanceAccountPartnerName);
-    if (pName && pName !== 'LOKESH' && pName !== 'HOTEL' && pName !== 'CASH') {
-      const existing = map.get(pName);
-      map.set(pName, {
-        id: inc.balanceAccountPartnerId ? String(inc.balanceAccountPartnerId) : existing?.id,
-        name: pName,
-      });
+    if (pName && map.has(pName) && inc.balanceAccountPartnerId) {
+      const existing = map.get(pName)!;
+      if (!existing.id) {
+        existing.id = String(inc.balanceAccountPartnerId);
+      }
     }
   });
 
-  // 4. Scan expense entries for extra partners
+  // 4. Scan expense entries for extra partners if missing IDs
   expenseRecords.forEach((exp) => {
     const pName = normalizePartnerName(exp.paidBy);
-    if (pName && pName !== 'LOKESH' && pName !== 'HOTEL' && pName !== 'CASH') {
-      const existing = map.get(pName);
-      map.set(pName, {
-        id: exp.paidByPartnerId ? String(exp.paidByPartnerId) : existing?.id,
-        name: pName,
-      });
+    if (pName && map.has(pName) && exp.paidByPartnerId) {
+      const existing = map.get(pName)!;
+      if (!existing.id) {
+        existing.id = String(exp.paidByPartnerId);
+      }
     }
   });
 
-  // 5. Scan settlements for extra partners
+  // 5. Scan settlements for extra partners if missing IDs
   partnerSettlements.forEach((s) => {
     const sName = normalizePartnerName(s.partnerName || s.partner_name || s.partner);
-    if (sName && sName !== 'LOKESH' && sName !== 'HOTEL' && sName !== 'CASH') {
-      const existing = map.get(sName);
-      map.set(sName, {
-        id: s.partnerId || s.partner_id ? String(s.partnerId || s.partner_id) : existing?.id,
-        name: sName,
-      });
+    const sId = s.partnerId || s.partner_id;
+    if (sName && map.has(sName) && sId) {
+      const existing = map.get(sName)!;
+      if (!existing.id) {
+        existing.id = String(sId);
+      }
     }
   });
 
-  // Sort: official partners first in order, then others alphabetically
-  const result: { id?: string; name: string }[] = [];
-  OFFICIAL_PARTNER_NAMES.forEach((name) => {
-    if (map.has(name)) {
-      result.push(map.get(name)!);
-      map.delete(name);
-    }
-  });
-
-  Array.from(map.values())
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .forEach((p) => result.push(p));
-
-  return result;
+  return OFFICIAL_PARTNER_NAMES.map((name) => map.get(name)!);
 }
 
 /**
@@ -295,6 +291,14 @@ export function calculatePartnerNetBalances(
     expenseRecords,
     partnerSettlements
   );
+
+  // Build ID to Name map for fast, reliable matching
+  const idToNameMap = new Map<string, string>();
+  effectivePartners.forEach((p) => {
+    if (p.id) {
+      idToNameMap.set(String(p.id).trim().toUpperCase(), p.name);
+    }
+  });
 
   // Collect all dates present in the system
   const dateSet = new Set<string>();
@@ -337,7 +341,7 @@ export function calculatePartnerNetBalances(
 
       // 1. New income balance assigned to that partner on date d
       const dayIncomeBalance = incomeRecords
-        .filter((inc) => inc.date === d && isIncomeAssignedToPartner(inc, partner.name, partner.id))
+        .filter((inc) => inc.date === d && isIncomeAssignedToPartner(inc, partner.name, partner.id, idToNameMap))
         .reduce((sum, inc) => {
           const bal = Number(inc.balance) || 0;
           return sum + (bal > 0 ? bal : 0);
@@ -345,7 +349,7 @@ export function calculatePartnerNetBalances(
 
       // 2. Expenses paid by that partner on date d
       const dayExpenses = expenseRecords
-        .filter((exp) => exp.date === d && isExpensePaidByPartner(exp, partner.name, partner.id))
+        .filter((exp) => exp.date === d && isExpensePaidByPartner(exp, partner.name, partner.id, idToNameMap))
         .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
 
       // 3. Partner settlements on date d
@@ -355,7 +359,7 @@ export function calculatePartnerNetBalances(
       partnerSettlements
         .filter((s) => {
           const sDate = s.date || s.settlement_date;
-          return sDate === d && isSettlementForPartner(s, partner.name, partner.id);
+          return sDate === d && isSettlementForPartner(s, partner.name, partner.id, idToNameMap);
         })
         .forEach((s) => {
           const amt = Number(s.amount) || 0;
@@ -441,26 +445,13 @@ export function calculatePartnerBalancesForMonth(
   partnerSettlements: any[] = [],
   partners: Partner[] = []
 ): PartnerNetBalance[] {
-  // Find the last day of the month or latest date in that month
-  const monthDates = [
-    ...incomeRecords.map((r) => r.date),
-    ...expenseRecords.map((r) => r.date),
-    ...partnerSettlements.map((s) => s.date || s.settlement_date),
-  ].filter((d) => d && d.startsWith(monthStr));
-
-  const sortedMonthDates = monthDates.sort((a, b) => a.localeCompare(b));
-  const latestDateInMonth =
-    sortedMonthDates.length > 0
-      ? sortedMonthDates[sortedMonthDates.length - 1]
-      : `${monthStr}-31`;
-
   return calculatePartnerNetBalances(
     incomeRecords,
     expenseRecords,
     partnerSettlements,
     partners,
     {
-      cutoffDate: latestDateInMonth,
+      cutoffDate: `${monthStr}-31`,
       startDate: `${monthStr}-01`,
     }
   );

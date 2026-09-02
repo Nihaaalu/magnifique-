@@ -49,21 +49,26 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
         b.partner_id === partnerId ||
         b.name?.toLowerCase() === partnerName.toLowerCase()
     );
+    const netBal = found ? Number(found.net_balance) || 0 : 0;
     return {
       balanceToHotel: found ? Number(found.balance_to_hotel) || 0 : 0,
       expensesByThem: found ? Number(found.expenses_by_them) || 0 : 0,
+      netBalance: netBal,
     };
   };
 
-  // Filter out any partner not in the official 5, and ONLY keep partners with balanceToHotel > 0 or expensesByThem > 0
-  const validPartners = partners.filter((p) => p.name.toUpperCase() !== 'LOKESH');
+  // Only official partners (IRSHAD, ANSARI, MUSADDIQ, SATHISH, YOGESH)
+  const officialNames = ['IRSHAD', 'ANSARI', 'MUSADDIQ', 'SATHISH', 'YOGESH'];
+  const validPartners = partners.filter((p) =>
+    officialNames.includes(p.name.trim().toUpperCase())
+  );
 
   const displayedPartners = validPartners.filter((partner) => {
-    const { balanceToHotel, expensesByThem } = getBalancesForPartner(
+    const { netBalance, balanceToHotel, expensesByThem } = getBalancesForPartner(
       partner.id,
       partner.name
     );
-    return balanceToHotel > 0 || expensesByThem > 0;
+    return Math.round(netBalance) !== 0 || balanceToHotel > 0 || expensesByThem > 0;
   });
 
   const handleOpenSettlement = (
@@ -189,7 +194,7 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
           </div>
         ) : (
           displayedPartners.map((partner, index) => {
-            const { balanceToHotel, expensesByThem } = getBalancesForPartner(
+            const { netBalance, balanceToHotel, expensesByThem } = getBalancesForPartner(
               partner.id,
               partner.name
             );
@@ -213,6 +218,27 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
                       Partner
                     </span>
                   </div>
+
+                  {/* Net Running Balance Badge */}
+                  {Math.round(netBalance) !== 0 && (
+                    <div
+                      id={`partner-${partner.name.toLowerCase()}-net-status-banner`}
+                      className={`p-2.5 rounded-lg border text-xs font-black flex items-center justify-between ${
+                        netBalance > 0
+                          ? 'bg-[#D4AF37]/10 border-[#D4AF37] text-[#F2C94C]'
+                          : 'bg-emerald-500/10 border-emerald-500 text-emerald-400'
+                      }`}
+                    >
+                      <span className="tracking-wide uppercase">
+                        {netBalance > 0
+                          ? `${partner.name.toUpperCase()} TO HOTEL`
+                          : `HOTEL TO ${partner.name.toUpperCase()}`}
+                      </span>
+                      <span className="text-sm font-extrabold">
+                        {formatCurrency(Math.abs(netBalance))}
+                      </span>
+                    </div>
+                  )}
 
                   {/* 1. Balance to Hotel (Partner owes Hotel) */}
                   <div

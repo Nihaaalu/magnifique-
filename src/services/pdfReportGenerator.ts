@@ -5,6 +5,10 @@ import {
   calculateDayBalanceSummary,
   calculateAllMonthsSummary,
 } from '../utils/accountBalanceUtils';
+import {
+  calculatePartnerBalancesForDate,
+  calculatePartnerBalancesForMonth,
+} from '../utils/partnerBalanceUtils';
 
 // Format currency as Rs. 1,25,000 or -Rs. 2,000
 export const formatPdfCurrency = (amount: number): string => {
@@ -662,8 +666,26 @@ export const generateDailyAccountsPdf = (
 
   currentY = (doc as any).lastAutoTable.finalY + 12;
 
-  // 1. Calculate partner totals for this report/date
-  const partnerTotals = calculatePartnerTotals(todayIncome, todayExpenses);
+  // 1. Calculate partner totals for this report/date using unified running partner balance
+  const partnerBalances = calculatePartnerBalancesForDate(
+    dateStr,
+    incomeRecords,
+    expenseRecords,
+    partnerSettlements || [],
+    partners || []
+  );
+
+  const partnerTotals: PartnerCalculationResult[] = partnerBalances.map((pb) => ({
+    partner: pb.partnerName,
+    partnerBalance: pb.incomeBalanceAdded,
+    expensesByThem: pb.expensesPaid,
+    toHotel: pb.netBalance,
+    balanceToHotel: pb.netBalance > 0 ? pb.netBalance : 0,
+    netBalance: pb.netBalance,
+    displayLabel: pb.displayLabel,
+    displayAmount: pb.displayAmount,
+    isZero: pb.isZero,
+  }));
 
   // 2. Draw Summary Box after ledger table (includes partner balance(s))
   currentY = drawSummaryBox(
@@ -1007,8 +1029,26 @@ export const generateMonthlyAccountsPdf = (
     }
   }
 
-  // 1. Calculate partner totals for this month's report
-  const partnerTotals = calculatePartnerTotals(monthIncome, monthExpenses);
+  // 1. Calculate partner totals for this month's report using unified running partner balance
+  const partnerBalances = calculatePartnerBalancesForMonth(
+    monthStr,
+    incomeRecords,
+    expenseRecords,
+    partnerSettlements || [],
+    partners || []
+  );
+
+  const partnerTotals: PartnerCalculationResult[] = partnerBalances.map((pb) => ({
+    partner: pb.partnerName,
+    partnerBalance: pb.incomeBalanceAdded,
+    expensesByThem: pb.expensesPaid,
+    toHotel: pb.netBalance,
+    balanceToHotel: pb.netBalance > 0 ? pb.netBalance : 0,
+    netBalance: pb.netBalance,
+    displayLabel: pb.displayLabel,
+    displayAmount: pb.displayAmount,
+    isZero: pb.isZero,
+  }));
 
   // 2. Draw Summary Box after ledger tables (includes partner balance(s))
   currentY = drawSummaryBox(
