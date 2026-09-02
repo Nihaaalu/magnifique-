@@ -43,6 +43,7 @@ interface IncomeLedgerProps {
   partners?: Partner[];
   onDeleteIncome: (id: string) => void | Promise<void>;
   onUpdateIncome?: (id: string, updatedRecord: Partial<IncomeRecord>) => void | Promise<void>;
+  onSettleIncome?: (incomeEntryId: string, paymentDate: string, amount: number) => Promise<void>;
 }
 
 type OneTimeMeal = 'breakfast' | 'lunch' | 'dinner';
@@ -54,6 +55,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   partners = [],
   onDeleteIncome,
   onUpdateIncome,
+  onSettleIncome,
 }) => {
   const [periodMode, setPeriodMode] = useState<LedgerPeriodMode>('day');
   const [selectedDay, setSelectedDay] = useState<string>(getTodayDateString());
@@ -93,6 +95,13 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Settle Modal State
+  const [settlingRecord, setSettlingRecord] = useState<IncomeRecord | null>(null);
+  const [settleAmount, setSettleAmount] = useState<string>('');
+  const [settleDate, setSettleDate] = useState<string>(getTodayDateString());
+  const [settleSubmitting, setSettleSubmitting] = useState(false);
+  const [settleError, setSettleError] = useState<string | null>(null);
 
   const handlePrev = () => {
     if (periodMode === 'day') {
@@ -197,81 +206,63 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
       record.byWho === 'À LA CARTE';
 
     if (isAlaCarte) {
+      const partnerName = record.byWho && record.byWho !== 'À LA CARTE' ? record.byWho : '';
+      const title = partnerName ? `À LA CARTE - ${partnerName}` : 'À LA CARTE';
       return {
-        label: 'À LA CARTE',
-        fullDescription: 'À LA CARTE',
-        priceBreakdown: '',
+        title,
+        priceLine: record.travels ? record.travels : `Total: ${formatCurrency(record.total)}`,
+        travels: record.travels,
         isAlaCarte: true,
       };
     }
 
+    const bP = record.breakfastPrice ? `₹${record.breakfastPrice}` : '';
+    const lP = record.lunchPrice ? `₹${record.lunchPrice}` : '';
+    const dP = record.dinnerPrice ? `₹${record.dinnerPrice}` : '';
+
+    let mealCode = 'B';
+    let prices = '';
+
     if (record.mealPlan === '3_time' || record.mealCombination === 'all') {
-      const bP = record.breakfastPrice ? `₹${record.breakfastPrice}` : '';
-      const lP = record.lunchPrice ? `₹${record.lunchPrice}` : '';
-      const dP = record.dinnerPrice ? `₹${record.dinnerPrice}` : '';
-      const prices = [bP, lP, dP].filter(Boolean).join(' + ');
-      return {
-        label: '3 TIME',
-        fullDescription: 'Breakfast + Lunch + Dinner',
-        priceBreakdown: prices ? `${prices} (₹${record.pricePerMember}/PAX)` : `₹${record.pricePerMember}/PAX`,
-        isAlaCarte: false,
-      };
-    }
-
-    if (record.mealPlan === '2_time') {
+      mealCode = 'B + L + D';
+      prices = [bP, lP, dP].filter(Boolean).join(' + ');
+    } else if (record.mealPlan === '2_time') {
       if (record.mealCombination === 'breakfast_lunch') {
-        const bP = record.breakfastPrice ? `₹${record.breakfastPrice}` : '';
-        const lP = record.lunchPrice ? `₹${record.lunchPrice}` : '';
-        const prices = [bP, lP].filter(Boolean).join(' + ');
-        return {
-          label: '2 TIME',
-          fullDescription: 'Breakfast + Lunch',
-          priceBreakdown: prices ? `${prices} (₹${record.pricePerMember}/PAX)` : `₹${record.pricePerMember}/PAX`,
-          isAlaCarte: false,
-        };
+        mealCode = 'B + L';
+        prices = [bP, lP].filter(Boolean).join(' + ');
+      } else if (record.mealCombination === 'breakfast_dinner') {
+        mealCode = 'B + D';
+        prices = [bP, dP].filter(Boolean).join(' + ');
+      } else {
+        mealCode = 'L + D';
+        prices = [lP, dP].filter(Boolean).join(' + ');
       }
-      if (record.mealCombination === 'breakfast_dinner') {
-        const bP = record.breakfastPrice ? `₹${record.breakfastPrice}` : '';
-        const dP = record.dinnerPrice ? `₹${record.dinnerPrice}` : '';
-        const prices = [bP, dP].filter(Boolean).join(' + ');
-        return {
-          label: '2 TIME',
-          fullDescription: 'Breakfast + Dinner',
-          priceBreakdown: prices ? `${prices} (₹${record.pricePerMember}/PAX)` : `₹${record.pricePerMember}/PAX`,
-          isAlaCarte: false,
-        };
+    } else {
+      // 1 TIME
+      if (record.mealCombination === 'lunch' || record.mealType === 'Lunch') {
+        mealCode = 'L';
+        prices = lP || (record.pricePerMember ? `₹${record.pricePerMember}` : '');
+      } else if (record.mealCombination === 'dinner' || record.mealType === 'Dinner') {
+        mealCode = 'D';
+        prices = dP || (record.pricePerMember ? `₹${record.pricePerMember}` : '');
+      } else {
+        mealCode = 'B';
+        prices = bP || (record.pricePerMember ? `₹${record.pricePerMember}` : '');
       }
-      if (record.mealCombination === 'lunch_dinner') {
-        const lP = record.lunchPrice ? `₹${record.lunchPrice}` : '';
-        const dP = record.dinnerPrice ? `₹${record.dinnerPrice}` : '';
-        const prices = [lP, dP].filter(Boolean).join(' + ');
-        return {
-          label: '2 TIME',
-          fullDescription: 'Lunch + Dinner',
-          priceBreakdown: prices ? `${prices} (₹${record.pricePerMember}/PAX)` : `₹${record.pricePerMember}/PAX`,
-          isAlaCarte: false,
-        };
-      }
-      return {
-        label: '2 TIME',
-        fullDescription: '2 Time Meals',
-        priceBreakdown: `₹${record.pricePerMember}/PAX`,
-        isAlaCarte: false,
-      };
     }
 
-    // Default 1 TIME
-    let mealName = 'Breakfast';
-    if (record.mealCombination === 'lunch' || record.mealType === 'Lunch') {
-      mealName = 'Lunch';
-    } else if (record.mealCombination === 'dinner' || record.mealType === 'Dinner') {
-      mealName = 'Dinner';
+    if (!prices && record.pricePerMember) {
+      prices = `₹${record.pricePerMember}`;
     }
-    const singlePrice = record.pricePerMember || record.breakfastPrice || record.lunchPrice || record.dinnerPrice || 0;
+
+    const paxStr = record.membersCount > 0 ? `(${record.membersCount} PAX)` : '';
+    const partnerStr = record.byWho ? `- ${record.byWho}` : '';
+    const title = [mealCode, paxStr, partnerStr].filter(Boolean).join(' ');
+
     return {
-      label: '1 TIME',
-      fullDescription: mealName,
-      priceBreakdown: singlePrice > 0 ? `₹${singlePrice}/PAX` : '',
+      title,
+      priceLine: prices,
+      travels: record.travels,
       isAlaCarte: false,
     };
   };
@@ -460,9 +451,41 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     }
   };
 
+  const handleOpenSettle = (record: IncomeRecord) => {
+    setSettlingRecord(record);
+    setSettleAmount(String(record.balance || ''));
+    setSettleDate(getTodayDateString());
+    setSettleError(null);
+  };
+
+  const handleSaveSettle = async () => {
+    if (!settlingRecord || !onSettleIncome) return;
+    const amt = parseFloat(settleAmount);
+    if (isNaN(amt) || amt <= 0) {
+      setSettleError('Please enter a valid settlement amount greater than 0.');
+      return;
+    }
+    if (amt > settlingRecord.balance) {
+      setSettleError(`Settlement amount cannot exceed remaining balance of ${formatCurrency(settlingRecord.balance)}.`);
+      return;
+    }
+
+    setSettleSubmitting(true);
+    setSettleError(null);
+    try {
+      await onSettleIncome(settlingRecord.id, settleDate || getTodayDateString(), amt);
+      setSettlingRecord(null);
+    } catch (err: any) {
+      setSettleError(err.message || 'Failed to record payment settlement.');
+    } finally {
+      setSettleSubmitting(false);
+    }
+  };
+
   const renderRecordRow = (record: IncomeRecord) => {
     const details = getRecordPlanDetails(record);
     const isDeleting = deletingId === record.id;
+    const hasBalance = record.balance > 0;
 
     return (
       <div
@@ -471,44 +494,25 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
           isDeleting ? 'opacity-40 pointer-events-none' : ''
         }`}
       >
-        <div className="min-w-0 flex-1">
-          {/* Top Line: Meal Plan Tag & Details */}
+        <div className="min-w-0 flex-1 space-y-1">
+          {/* Top Line: Simplified Meal/Plan & Partner info */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="font-bold text-[#D4AF37] uppercase text-[10px] sm:text-[11px] bg-[#1D1D1D] px-2 py-0.5 rounded border border-[#2A2A2A]">
-              {details.label}
+            <span className="font-bold text-[#F5F5F5] text-xs sm:text-sm tracking-wide">
+              {details.title}
             </span>
-            <span className="font-bold text-[#F5F5F5]">
-              {details.fullDescription}
-            </span>
-            {!details.isAlaCarte && (
-              <>
-                <span className="text-[#777777]">•</span>
-                <span className="font-semibold text-[#D4AF37]">
-                  {record.byWho}
-                </span>
-                {record.membersCount > 0 && (
-                  <span className="text-[#B8B8B8] font-medium">
-                    · {record.membersCount} PAX
-                  </span>
-                )}
-                {details.priceBreakdown && (
-                  <span className="text-[#777777] text-[11px]">
-                    ({details.priceBreakdown})
-                  </span>
-                )}
-              </>
-            )}
-            {record.travels && (
-              <span className="text-[#777777] truncate">
-                · {record.travels}
-              </span>
-            )}
           </div>
 
-          {/* Bottom Line: Payment breakdown */}
-          <div className="flex items-center gap-2 text-[11px] mt-1 text-[#B8B8B8] flex-wrap">
-            {record.paymentStatus === 'Paid Full' ? (
-              <span className="text-[#4ade80] font-bold bg-[#142416] px-1.5 py-0.5 rounded border border-[#22543d]">
+          {/* Middle Line: Simplified Prices Breakdown / Travels */}
+          {details.priceLine && (
+            <div className="text-[11px] font-medium text-[#D4AF37]">
+              {details.priceLine}
+            </div>
+          )}
+
+          {/* Bottom Line: Payment breakdown & Settle button */}
+          <div className="flex items-center gap-2 text-[11px] pt-0.5 text-[#B8B8B8] flex-wrap">
+            {!hasBalance ? (
+              <span className="text-[#4ade80] font-bold bg-[#142416] px-2 py-0.5 rounded border border-[#22543d]">
                 Paid Full
               </span>
             ) : (
@@ -518,20 +522,30 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                     Received {formatCurrency(record.amountPaid)}
                   </span>
                 )}
-                <span className="text-[#f87171] font-bold bg-[#201212] px-1.5 py-0.5 rounded border border-[#3d1d1d]">
+                <span className="text-[#f87171] font-bold bg-[#201212] px-2 py-0.5 rounded border border-[#3d1d1d]">
                   Balance {formatCurrency(record.balance)}
                 </span>
                 {(record.balanceAccountPartnerName || record.balanceAccountPartnerId) && (
-                  <span className="text-[#777777] font-medium">
-                    (Balance Account: <strong className="text-[#D0D0D0]">{record.balanceAccountPartnerName || 'Partner'}</strong>)
+                  <span className="text-[#888888] font-medium">
+                    (Account: <strong className="text-[#D0D0D0]">{record.balanceAccountPartnerName || 'Partner'}</strong>)
                   </span>
+                )}
+                {onSettleIncome && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenSettle(record)}
+                    className="px-2 py-0.5 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] font-black rounded text-[10px] tracking-wide transition-colors cursor-pointer shadow-xs"
+                    title="Settle remaining balance"
+                  >
+                    Settle
+                  </button>
                 )}
               </>
             )}
           </div>
         </div>
 
-        {/* Right side: Amount and Edit/Delete Actions */}
+        {/* Right side: Total Amount and Edit/Delete Actions */}
         <div className="flex items-center gap-1.5 shrink-0">
           <div className="text-right mr-1">
             <div className="font-black text-[#F2C94C] text-sm sm:text-base">
@@ -1106,6 +1120,125 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                   className="px-4 py-1.5 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] rounded text-xs font-black"
                 >
                   {editSubmitting ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Settle Balance Modal */}
+      {settlingRecord && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/80 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-[#171717] rounded-xl border border-[#D4AF37]/40 shadow-2xl max-w-sm w-full p-4 sm:p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-[#2A2A2A] pb-2.5">
+              <div className="flex flex-col">
+                <h3 className="text-sm font-black text-[#F5F5F5] tracking-wide">
+                  Settle Income Balance
+                </h3>
+                <span className="text-[10px] text-[#888888]">
+                  {getRecordPlanDetails(settlingRecord).title}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettlingRecord(null)}
+                className="p-1 text-[#777777] hover:text-[#F5F5F5] rounded cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {settleError && (
+              <div className="p-2.5 bg-[#201212] border border-[#3d1d1d] text-[#f87171] rounded text-xs font-semibold">
+                {settleError}
+              </div>
+            )}
+
+            {/* Balance Overview Card */}
+            <div className="p-3 bg-[#111111] border border-[#2A2A2A] rounded-lg grid grid-cols-2 gap-2 text-center text-xs">
+              <div className="p-1.5 bg-[#171717] rounded">
+                <span className="text-[10px] text-[#777777] block font-semibold">Total Entry</span>
+                <span className="font-bold text-[#F5F5F5]">{formatCurrency(settlingRecord.total)}</span>
+              </div>
+              <div className="p-1.5 bg-[#201212] rounded border border-[#3d1d1d]">
+                <span className="text-[10px] text-[#f87171] block font-bold">Remaining Balance</span>
+                <span className="font-black text-[#f87171] text-sm">{formatCurrency(settlingRecord.balance)}</span>
+              </div>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                }
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">
+                  Payment Date
+                </label>
+                <input
+                  type="date"
+                  id="income-settle-date"
+                  value={settleDate}
+                  onChange={(e) => setSettleDate(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                  required
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] text-[#D0D0D0] font-semibold">
+                    Amount Paid Now (₹)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setSettleAmount(String(settlingRecord.balance))}
+                    className="text-[10px] text-[#D4AF37] hover:text-[#F2C94C] underline cursor-pointer font-semibold"
+                  >
+                    Full ({formatCurrency(settlingRecord.balance)})
+                  </button>
+                </div>
+                <input
+                  type="number"
+                  id="income-settle-amount"
+                  min="1"
+                  max={settlingRecord.balance}
+                  step="any"
+                  value={settleAmount}
+                  onChange={(e) => setSettleAmount(e.target.value)}
+                  placeholder="Enter amount"
+                  className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#D4AF37] rounded text-sm font-black text-[#F2C94C] focus:outline-none focus:ring-1 focus:ring-[#D4AF37]"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#2A2A2A]">
+                <button
+                  type="button"
+                  onClick={() => setSettlingRecord(null)}
+                  className="px-3 py-1.5 bg-[#111111] text-[#B8B8B8] hover:text-[#F5F5F5] rounded text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="income-save-settle-btn"
+                  onClick={() => handleSaveSettle()}
+                  disabled={settleSubmitting}
+                  className="px-4 py-1.5 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] rounded text-xs font-black transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {settleSubmitting ? 'Saving...' : 'Save Settlement'}
                 </button>
               </div>
             </form>

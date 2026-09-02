@@ -1032,3 +1032,120 @@ export async function changeAppPin(
   return Boolean(data);
 }
 
+// ==========================================
+// 9. INCOME PAYMENT SETTLEMENTS
+// ==========================================
+
+export interface CreateIncomePaymentSettlementParams {
+  income_entry_id: string;
+  payment_date: string;
+  amount: number;
+}
+
+/**
+ * Record a payment settlement for an income entry and update the income entry's amount_received.
+ * Note: balance_amount in income_entries is a generated column and must NOT be updated directly.
+ */
+export async function createIncomePaymentSettlement(
+  params: CreateIncomePaymentSettlementParams
+): Promise<{ settlement: any; updatedIncome: any }> {
+  const settlementAmount = Number(params.amount);
+  if (isNaN(settlementAmount) || settlementAmount <= 0) {
+    throw new Error('Settlement amount must be greater than 0.');
+  }
+
+  // 1. Fetch current income entry to validate balance
+  const { data: currentEntry, error: fetchErr } = await supabase
+    .from('income_entries')
+    .select('*')
+    .eq('id', params.income_entry_id)
+    .single();
+
+  if (fetchErr || !currentEntry) {
+    throw new Error(`Income entry not found: ${fetchErr?.message || 'Unknown error'}`);
+  }
+
+  const currentTotal = Number(currentEntry.total_amount) || 0;
+  const currentReceived = Number(currentEntry.amount_received) || 0;
+  const currentBalance = Math.max(0, currentTotal - currentReceived);
+
+  if (settlementAmount > currentBalance) {
+    throw new Error(
+      `Settlement amount (Rs. ${settlementAmount.toLocaleString('en-IN')}) cannot exceed remaining balance of Rs. ${currentBalance.toLocaleString('en-IN')}.`
+    );
+  }
+
+  // 2. Insert settlement record into income_payment_settlements
+  const { data: settlementData, error: settlementErr } = await supabase
+    .from('income_payment_settlements')
+    .insert({
+      income_entry_id: Number(params.income_entry_id) || params.income_entry_id,
+      payment_date: params.payment_date,
+      amount: settlementAmount,
+    })
+    .select()
+    .single();
+
+  if (settlementErr) {
+    console.error('Error inserting income settlement:', settlementErr);
+    throw new Error(`Failed to record settlement: ${settlementErr.message}`);
+  }
+
+  // 3. Update income_entries.amount_received
+  const newAmountReceived = currentReceived + settlementAmount;
+  let newPaymentStatus: 'paid_full' | 'paid_partial' | 'balance' = 'paid_full';
+  if (newAmountReceived >= currentTotal) {
+    newPaymentStatus = 'paid_full';
+  } else if (newAmountReceived > 0) {
+    newPaymentStatus = 'paid_partial';
+  } else {
+    newPaymentStatus = 'balance';
+  }
+
+  const updatePayload: Record<string, any> = {
+    amount_received: newAmountReceived,
+    payment_status: newPaymentStatus,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (newPaymentStatus === 'paid_full') {
+    updatePayload.balance_account_partner_id = null;
+  }
+
+  const { data: updatedIncome, error: updateErr } = await supabase
+    .from('income_entries')
+    .update(updatePayload)
+    .eq('id', params.income_entry_id)
+    .select()
+    .single();
+
+  if (updateErr) {
+    console.error('Error updating income entry amount_received:', updateErr);
+    throw new Error(`Failed to update income entry received amount: ${updateErr.message}`);
+  }
+
+  return { settlement: settlementData, updatedIncome };
+}
+
+/**
+ * Fetch income payment settlements
+ */
+export async function fetchIncomePaymentSettlements(incomeEntryId?: string): Promise<any[]> {
+  let query = supabase
+    .from('income_payment_settlements')
+    .select('*')
+    .order('payment_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (incomeEntryId) {
+    query = query.eq('income_entry_id', incomeEntryId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error('Error fetching income payment settlements:', error);
+    return [];
+  }
+  return data || [];
+}
+

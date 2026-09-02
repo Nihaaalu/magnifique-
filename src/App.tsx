@@ -24,6 +24,7 @@ import {
   fetchPartnerCurrentBalances,
   fetchPartnerSettlements,
   createPartnerSettlement,
+  createIncomePaymentSettlement,
   fetchAccountMonths,
   getOrCreateAccountMonth,
   closeAccountMonthInDb,
@@ -311,6 +312,24 @@ export default function App() {
     setPartnerBalances(updatedBalances);
   };
 
+  const handleSettleIncome = async (
+    incomeEntryId: string,
+    paymentDate: string,
+    amount: number
+  ) => {
+    await createIncomePaymentSettlement({
+      income_entry_id: incomeEntryId,
+      payment_date: paymentDate,
+      amount,
+    });
+    const [updatedIncome, updatedBalances] = await Promise.all([
+      fetchIncomeEntries(),
+      fetchPartnerCurrentBalances(),
+    ]);
+    setIncomeRecords(updatedIncome);
+    setPartnerBalances(updatedBalances);
+  };
+
   // Expense Operations
   const handleAddExpense = async (
     entry: Omit<ExpenseEntryRow, 'id' | 'created_at' | 'updated_at'>
@@ -490,6 +509,7 @@ export default function App() {
             onAddIncome={handleAddIncome}
             onDeleteIncome={handleDeleteIncome}
             onUpdateIncome={handleUpdateIncome}
+            onSettleIncome={handleSettleIncome}
             isLoading={isLoading}
           />
         )}

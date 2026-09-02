@@ -21,6 +21,7 @@ interface IncomeTabProps {
   onAddIncome: (record: Omit<IncomeEntryRow, 'id' | 'created_at' | 'updated_at'>) => Promise<void>;
   onDeleteIncome: (id: string) => Promise<void>;
   onUpdateIncome?: (id: string, updatedRecord: Partial<IncomeRecord>) => Promise<void>;
+  onSettleIncome?: (incomeEntryId: string, paymentDate: string, amount: number) => Promise<void>;
   isLoading?: boolean;
 }
 
@@ -34,6 +35,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   onAddIncome,
   onDeleteIncome,
   onUpdateIncome,
+  onSettleIncome,
 }) => {
   // Primary Selection: 1 TIME | 2 TIME | 3 TIME | À LA CARTE
   const [selectedPlan, setSelectedPlan] = useState<MealPlan>('1_time');
@@ -56,6 +58,10 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const [breakfastPrice, setBreakfastPrice] = useState<string>('');
   const [lunchPrice, setLunchPrice] = useState<string>('');
   const [dinnerPrice, setDinnerPrice] = useState<string>('');
+
+  // Editable Total Amount state (Meal bookings and À La Carte)
+  const [totalAmountInput, setTotalAmountInput] = useState<string>('');
+  const [isTotalManuallyEdited, setIsTotalManuallyEdited] = useState<boolean>(false);
 
   // À LA CARTE manual total
   const [manualTotalAmount, setManualTotalAmount] = useState<string>('');
@@ -104,6 +110,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
   const handlePlanChange = (plan: MealPlan) => {
     setSelectedPlan(plan);
+    setIsTotalManuallyEdited(false);
     setValidationError(null);
     if (plan === 'alacarte') {
       const irshad = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
@@ -120,44 +127,61 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const dPriceNum = Math.max(0, parseFloat(dinnerPrice) || 0);
   const manualTotalNum = Math.max(0, parseFloat(manualTotalAmount) || 0);
 
-  // Calculate live total based on plan & combination
-  let totalCalculated = 0;
+  // Calculate live suggested total based on plan & combination
+  let suggestedTotal = 0;
   if (isAlaCarte) {
-    totalCalculated = manualTotalNum;
+    suggestedTotal = manualTotalNum;
   } else if (selectedPlan === '1_time') {
     if (oneTimeMeal === 'breakfast') {
-      totalCalculated = countNum * bPriceNum;
+      suggestedTotal = countNum * bPriceNum;
     } else if (oneTimeMeal === 'lunch') {
-      totalCalculated = countNum * lPriceNum;
+      suggestedTotal = countNum * lPriceNum;
     } else {
-      totalCalculated = countNum * dPriceNum;
+      suggestedTotal = countNum * dPriceNum;
     }
   } else if (selectedPlan === '2_time') {
     if (twoTimeCombo === 'breakfast_lunch') {
-      totalCalculated = countNum * (bPriceNum + lPriceNum);
+      suggestedTotal = countNum * (bPriceNum + lPriceNum);
     } else if (twoTimeCombo === 'breakfast_dinner') {
-      totalCalculated = countNum * (bPriceNum + dPriceNum);
+      suggestedTotal = countNum * (bPriceNum + dPriceNum);
     } else {
-      totalCalculated = countNum * (lPriceNum + dPriceNum);
+      suggestedTotal = countNum * (lPriceNum + dPriceNum);
     }
   } else if (selectedPlan === '3_time') {
-    totalCalculated = countNum * (bPriceNum + lPriceNum + dPriceNum);
+    suggestedTotal = countNum * (bPriceNum + lPriceNum + dPriceNum);
   }
 
-  // Amount Paid & Balance calculation
+  // Update totalAmountInput automatically when inputs change unless user manually edited it
+  useEffect(() => {
+    if (isAlaCarte) return;
+    if (!isTotalManuallyEdited) {
+      setTotalAmountInput(suggestedTotal > 0 ? String(suggestedTotal) : '');
+    }
+  }, [
+    isAlaCarte,
+    isTotalManuallyEdited,
+    suggestedTotal,
+  ]);
+
+  // Authoritative Total Amount
+  const authoritativeTotal = isAlaCarte
+    ? manualTotalNum
+    : (isTotalManuallyEdited ? (parseFloat(totalAmountInput) || 0) : (suggestedTotal || parseFloat(totalAmountInput) || 0));
+
+  // Amount Paid & Balance calculation using authoritative total
   let finalPaid = 0;
   let finalBalance = 0;
 
   if (paymentStatus === 'Paid Full') {
-    finalPaid = totalCalculated;
+    finalPaid = authoritativeTotal;
     finalBalance = 0;
   } else if (paymentStatus === 'Balance') {
     finalPaid = 0;
-    finalBalance = totalCalculated;
+    finalBalance = authoritativeTotal;
   } else {
     const paidInput = Math.max(0, parseFloat(amountPaid) || 0);
-    finalPaid = Math.min(paidInput, totalCalculated);
-    finalBalance = Math.max(0, totalCalculated - finalPaid);
+    finalPaid = Math.min(paidInput, authoritativeTotal);
+    finalBalance = Math.max(0, authoritativeTotal - finalPaid);
   }
 
   const handleResetForm = () => {
@@ -170,6 +194,8 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     setLunchPrice('');
     setDinnerPrice('');
     setManualTotalAmount('');
+    setTotalAmountInput('');
+    setIsTotalManuallyEdited(false);
     setPaymentStatus('Paid Full');
     setAmountPaid('');
     setBalanceAccountPartnerId(irshad?.id || '');
@@ -268,7 +294,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         setValidationError('Please enter a valid amount paid.');
         return;
       }
-      if (paidVal >= totalCalculated) {
+      if (paidVal >= authoritativeTotal) {
         setValidationError('Amount paid cannot equal or exceed total for partial payment. Select "Paid Full".');
         return;
       }
@@ -331,14 +357,14 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         dinner_price: dPriceToStore,
         travel_name: travels.trim() || null,
         member_count: isAlaCarte ? null : countNum,
-        total_amount: totalCalculated,
+        total_amount: authoritativeTotal,
         amount_received: finalPaid,
         payment_status: dbPaymentStatus,
         by_who: resolvedByWho,
         balance_account_partner_id: partnerIdForBalance,
       });
 
-      setFeedbackMsg(`Saved ${getPlanBadgeLabel()} (${formatCurrency(totalCalculated)}) to Supabase`);
+      setFeedbackMsg(`Saved ${getPlanBadgeLabel()} (${formatCurrency(authoritativeTotal)}) to Supabase`);
       handleResetForm();
 
       setTimeout(() => {
@@ -894,23 +920,50 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                   </div>
                 )}
 
-                {/* Real-time Calculated Total Amount Display */}
-                <div className="flex items-center justify-between p-3 bg-[#111111] border border-[#D4AF37]/40 rounded-lg">
-                  <div className="flex flex-col">
-                    <span className="text-xs font-bold text-[#B8B8B8]">TOTAL AMOUNT</span>
-                    <span className="text-[10px] text-[#777777]">
-                      {countNum} PAX × ₹{(
-                        selectedPlan === '1_time'
-                          ? (oneTimeMeal === 'breakfast' ? bPriceNum : oneTimeMeal === 'lunch' ? lPriceNum : dPriceNum)
-                          : selectedPlan === '2_time'
-                          ? (twoTimeCombo === 'breakfast_lunch' ? bPriceNum + lPriceNum : twoTimeCombo === 'breakfast_dinner' ? bPriceNum + dPriceNum : lPriceNum + dPriceNum)
-                          : bPriceNum + lPriceNum + dPriceNum
-                      ).toFixed(0)}
-                    </span>
+                {/* Authoritative Total Amount Section (Editable with live calculated reference) */}
+                <div className="p-3 bg-[#111111] border border-[#D4AF37]/50 rounded-lg space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-black text-[#F2C94C] tracking-wide">
+                        TOTAL AMOUNT (₹)
+                      </label>
+                      <span className="text-[10px] text-[#888888]">
+                        Suggested: {countNum} PAX × ₹{(
+                          selectedPlan === '1_time'
+                            ? (oneTimeMeal === 'breakfast' ? bPriceNum : oneTimeMeal === 'lunch' ? lPriceNum : dPriceNum)
+                            : selectedPlan === '2_time'
+                            ? (twoTimeCombo === 'breakfast_lunch' ? bPriceNum + lPriceNum : twoTimeCombo === 'breakfast_dinner' ? bPriceNum + dPriceNum : lPriceNum + dPriceNum)
+                            : bPriceNum + lPriceNum + dPriceNum
+                        ).toFixed(0)} = {formatCurrency(suggestedTotal)}
+                      </span>
+                    </div>
+                    {isTotalManuallyEdited && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsTotalManuallyEdited(false);
+                          setTotalAmountInput(suggestedTotal > 0 ? String(suggestedTotal) : '');
+                        }}
+                        className="text-[10px] text-[#D4AF37] hover:text-[#F2C94C] underline cursor-pointer font-bold"
+                      >
+                        Reset to calculated ({formatCurrency(suggestedTotal)})
+                      </button>
+                    )}
                   </div>
-                  <span id="income-calculated-total" className="text-base sm:text-lg font-black text-[#F2C94C]">
-                    {formatCurrency(totalCalculated)}
-                  </span>
+                  <input
+                    type="number"
+                    id="income-total-amount-input"
+                    min="0"
+                    step="any"
+                    placeholder="Enter total amount"
+                    value={totalAmountInput}
+                    onChange={(e) => {
+                      setTotalAmountInput(e.target.value);
+                      setIsTotalManuallyEdited(true);
+                    }}
+                    className="w-full px-3 py-2 bg-[#171717] border border-[#D4AF37] rounded-md text-sm font-black text-[#F2C94C] placeholder-[#777777] min-h-[42px] focus:outline-none focus:ring-1 focus:ring-[#D4AF37]"
+                    required
+                  />
                 </div>
               </div>
             )}
@@ -955,7 +1008,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                         type="number"
                         id="income-amount-received"
                         min="0"
-                        max={totalCalculated}
+                        max={authoritativeTotal}
                         step="any"
                         placeholder="Amount"
                         value={amountPaid}
@@ -999,7 +1052,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                 <div className="p-3 bg-[#111111] border border-[#3d1d1d] rounded-lg space-y-2.5 mt-2">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-[#f87171] font-semibold">Balance Due:</span>
-                    <span className="font-bold text-[#f87171] text-sm">{formatCurrency(totalCalculated)}</span>
+                    <span className="font-bold text-[#f87171] text-sm">{formatCurrency(authoritativeTotal)}</span>
                   </div>
 
                   <div>
@@ -1084,6 +1137,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
           partners={partners}
           onDeleteIncome={onDeleteIncome}
           onUpdateIncome={onUpdateIncome}
+          onSettleIncome={onSettleIncome}
         />
       </section>
     </div>

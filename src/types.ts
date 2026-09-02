@@ -145,6 +145,14 @@ export interface AccountMonthRow {
   updated_at?: string;
 }
 
+export interface IncomePaymentSettlement {
+  id: string;
+  income_entry_id: string;
+  payment_date: string;
+  amount: number;
+  created_at?: string;
+}
+
 export interface ProfitShareResult {
   totalIncome: number;
   totalExpense: number;

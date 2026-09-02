@@ -43,6 +43,19 @@ export const formatPdfDateMedium = (dateStr: string): string => {
   return `${dd} ${mm} ${year}`;
 };
 
+// Format Date YYYY-MM-DD to Day Header (e.g. 1 SEP, 2 SEP, 15 SEP)
+export const formatDayHeader = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const day = parseInt(parts[2], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  const year = parseInt(parts[0], 10);
+  const d = new Date(year, month, day);
+  const monthShort = d.toLocaleDateString('en-GB', { month: 'short' }).toUpperCase();
+  return `${day} ${monthShort}`;
+};
+
 // Format Month YYYY-MM to Month YYYY (e.g. August 2026)
 export const formatPdfMonth = (monthStr: string): string => {
   if (!monthStr) return '';
@@ -719,14 +732,14 @@ export const generateDailyAccountsPdf = (
       fillColor: [252, 252, 250],
     },
     columnStyles: {
-      0: { cellWidth: 105 }, // Income NAME
-      1: { cellWidth: 38, halign: 'center' }, // Income MEAL
-      2: { cellWidth: 52, halign: 'right' }, // Income BALANCE
-      3: { cellWidth: 52, halign: 'right' }, // Income PAID
-      4: { cellWidth: 52, halign: 'right', fontStyle: 'bold' }, // Income TOTAL
-      5: { cellWidth: 124 }, // Expense NAME
-      6: { cellWidth: 60 }, // Expense PAID BY
-      7: { cellWidth: 64, halign: 'right', fontStyle: 'bold' }, // Expense AMOUNT
+      0: { cellWidth: 118 }, // Income NAME
+      1: { cellWidth: 44, halign: 'center' }, // Income MEAL
+      2: { cellWidth: 58, halign: 'right' }, // Income BALANCE
+      3: { cellWidth: 54, halign: 'right' }, // Income PAID
+      4: { cellWidth: 56, halign: 'right', fontStyle: 'bold' }, // Income TOTAL
+      5: { cellWidth: 103 }, // Expense DESCRIPTION
+      6: { cellWidth: 56 }, // Expense PAID BY
+      7: { cellWidth: 58, halign: 'right', fontStyle: 'bold' }, // Expense AMOUNT
     },
     didParseCell: (data) => {
       if (maxRows === 0 && data.row.index === 0 && data.section === 'body') {
@@ -819,9 +832,31 @@ export const generateMonthlyAccountsPdf = (
   const monthData = allMonths[monthStr];
   const openingBalance = monthData?.openingBalance ?? 0;
   const closingBalance = monthData?.closingBalance ?? (openingBalance + totalIncome - totalExpense);
-  const firstDateFormatted = formatPdfDateMedium(monthData?.firstDate || `${monthStr}-01`);
-  const lastDateFormatted = formatPdfDateMedium(monthData?.lastDate || `${monthStr}-30`);
 
+  // Unique dates that actually have accounts in this month (sorted chronologically)
+  const uniqueDates = Array.from(
+    new Set([
+      ...monthIncome.map((r) => r.date).filter((d): d is string => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d)),
+      ...monthExpenses.map((r) => r.date).filter((d): d is string => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d)),
+    ])
+  ).sort((a, b) => a.localeCompare(b));
+
+  // Determine actual cutoff dates for summary labels:
+  // - Opening Date: First recorded entry date or 1st of month
+  // - Closing Date: If month is closed in DB, use closed_at; if open, use latest accounting date available in this month
+  const firstDateFormatted = uniqueDates.length > 0
+    ? formatPdfDateMedium(uniqueDates[0])
+    : formatPdfDateMedium(`${monthStr}-01`);
+
+  let closingDateFormatted = '';
+  const dbMonth = accountMonths?.find((m) => m.month_start && m.month_start.startsWith(monthStr));
+  if (dbMonth?.is_closed && dbMonth.closed_at) {
+    closingDateFormatted = formatPdfDateMedium(dbMonth.closed_at.substring(0, 10));
+  } else if (uniqueDates.length > 0) {
+    closingDateFormatted = formatPdfDateMedium(uniqueDates[uniqueDates.length - 1]);
+  } else {
+    closingDateFormatted = formatPdfDateMedium(monthData?.lastDate || `${monthStr}-01`);
+  }
 
   // Initialize Exact A4 Portrait Document (210mm x 297mm)
   const doc = new jsPDF({
@@ -873,125 +908,220 @@ export const generateMonthlyAccountsPdf = (
   doc.setDrawColor(212, 175, 55);
   doc.setLineWidth(1.0);
   doc.line(leftMargin, currentY, pageWidth - rightMargin, currentY);
-  currentY += 10;
+  currentY += 12;
 
-  // Build Structured Side-by-Side Table Head & Body
+  // Table Header definition
   const tableHead = [
     [
-      { content: 'INCOME', colSpan: 5, styles: { halign: 'center', fillColor: [26, 26, 26], textColor: [212, 175, 55], fontStyle: 'bold', fontSize: 7.5 } },
-      { content: 'EXPENSE', colSpan: 3, styles: { halign: 'center', fillColor: [35, 35, 35], textColor: [212, 175, 55], fontStyle: 'bold', fontSize: 7.5 } },
+      {
+        content: 'INCOME',
+        colSpan: 5,
+        styles: {
+          halign: 'center',
+          fillColor: [26, 26, 26],
+          textColor: [212, 175, 55],
+          fontStyle: 'bold',
+          fontSize: 7.5,
+        },
+      },
+      {
+        content: 'EXPENSE',
+        colSpan: 3,
+        styles: {
+          halign: 'center',
+          fillColor: [35, 35, 35],
+          textColor: [212, 175, 55],
+          fontStyle: 'bold',
+          fontSize: 7.5,
+        },
+      },
     ],
     [
-      'NAME', 'MEAL', 'BALANCE', 'PAID', 'TOTAL',
-      'DESCRIPTION', 'PAID BY', 'AMOUNT',
+      'NAME',
+      'MEAL',
+      'BALANCE',
+      'PAID',
+      'TOTAL',
+      'DESCRIPTION',
+      'PAID BY',
+      'AMOUNT',
     ],
   ];
 
-  const maxRows = Math.max(monthIncome.length, monthExpenses.length);
-  let tableBody: string[][] = [];
-
-  if (maxRows === 0) {
-    tableBody = [['No transactions found for this month.', '', '', '', '', '', '', '']];
+  if (uniqueDates.length === 0) {
+    // No transactions for the month
+    const emptyBody = [['No transactions found for this month.', '', '', '', '', '', '', '']];
+    autoTable(doc, {
+      head: tableHead as any,
+      body: emptyBody,
+      startY: currentY,
+      margin: { left: leftMargin, right: rightMargin, top: 32, bottom: 32 },
+      theme: 'grid',
+      styles: {
+        font: fontFamily,
+        fontSize: 7,
+        cellPadding: 3,
+        lineColor: [220, 220, 218],
+        lineWidth: 0.5,
+        textColor: [30, 30, 30],
+        overflow: 'linebreak',
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [26, 26, 26],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 7,
+        halign: 'left',
+        cellPadding: 3,
+      },
+      columnStyles: {
+        0: { cellWidth: 118 },
+        1: { cellWidth: 44, halign: 'center' },
+        2: { cellWidth: 58, halign: 'right' },
+        3: { cellWidth: 54, halign: 'right' },
+        4: { cellWidth: 56, halign: 'right', fontStyle: 'bold' },
+        5: { cellWidth: 103 },
+        6: { cellWidth: 56 },
+        7: { cellWidth: 58, halign: 'right', fontStyle: 'bold' },
+      },
+      didParseCell: (data) => {
+        if (data.row.index === 0 && data.section === 'body') {
+          if (data.column.index === 0) {
+            data.cell.colSpan = 8;
+            data.cell.styles.halign = 'center';
+            data.cell.styles.textColor = [120, 120, 120];
+            data.cell.styles.fontStyle = 'italic';
+          }
+        }
+      },
+      showHead: 'everyPage',
+      pageBreak: 'auto',
+    });
+    currentY = (doc as any).lastAutoTable.finalY + 12;
   } else {
-    for (let i = 0; i < maxRows; i++) {
-      const inc = monthIncome[i];
-      const exp = monthExpenses[i];
+    // Render each date that has accounts
+    for (let dIdx = 0; dIdx < uniqueDates.length; dIdx++) {
+      const dateStr = uniqueDates[dIdx];
+      const dayIncome = monthIncome.filter((r) => r.date === dateStr);
+      const dayExpenses = monthExpenses.filter((r) => r.date === dateStr);
+      const maxRows = Math.max(dayIncome.length, dayExpenses.length);
 
-      const incName = inc ? formatIncomeName(inc) : '';
-      const incMeal = inc ? formatMealColumn(inc) : '';
-      const incBalance = inc ? formatIncomeBalance(inc) : '';
-      const incPaid = inc ? formatPdfCurrency(inc.amountPaid || 0) : '';
-      const incTotal = inc ? formatPdfCurrency(inc.total || 0) : '';
+      if (maxRows === 0) continue;
 
-      const expName = exp ? formatExpenseName(exp) : '';
-      const expPaidBy = exp ? (exp.paidBy || 'Hotel').trim() : '';
-      const expAmount = exp ? formatPdfCurrency(exp.amount || 0) : '';
+      const dayBody: string[][] = [];
+      for (let i = 0; i < maxRows; i++) {
+        const inc = dayIncome[i];
+        const exp = dayExpenses[i];
 
-      tableBody.push([
-        incName,
-        incMeal,
-        incBalance,
-        incPaid,
-        incTotal,
-        expName,
-        expPaidBy,
-        expAmount,
-      ]);
+        const incName = inc ? formatIncomeName(inc) : '';
+        const incMeal = inc ? formatMealColumn(inc) : '';
+        const incBalance = inc ? formatIncomeBalance(inc) : '';
+        const incPaid = inc ? formatPdfCurrency(inc.amountPaid || 0) : '';
+        const incTotal = inc ? formatPdfCurrency(inc.total || 0) : '';
+
+        const expName = exp ? formatExpenseName(exp) : '';
+        const expPaidBy = exp ? (exp.paidBy || 'Hotel').trim() : '';
+        const expAmount = exp ? formatPdfCurrency(exp.amount || 0) : '';
+
+        dayBody.push([
+          incName,
+          incMeal,
+          incBalance,
+          incPaid,
+          incTotal,
+          expName,
+          expPaidBy,
+          expAmount,
+        ]);
+      }
+
+      // Check remaining page space for Date Label + Table Header + at least 1 row (~52pt)
+      if (currentY + 52 > pageHeight - 32) {
+        doc.addPage();
+        currentY = 36;
+      }
+
+      // Date Label Header (e.g. "1 SEP")
+      const dayHeader = formatDayHeader(dateStr);
+      const fullDateMedium = formatPdfDateMedium(dateStr);
+
+      doc.setFont(fontFamily, 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(180, 130, 20); // Warm Gold
+      doc.text(dayHeader, leftMargin, currentY + 5);
+
+      doc.setFont(fontFamily, 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(110, 110, 110);
+      doc.text(`•  ${fullDateMedium}`, leftMargin + doc.getTextWidth(dayHeader) + 6, currentY + 5);
+
+      currentY += 9;
+
+      autoTable(doc, {
+        head: tableHead as any,
+        body: dayBody,
+        startY: currentY,
+        margin: { left: leftMargin, right: rightMargin, top: 32, bottom: 32 },
+        theme: 'grid',
+        styles: {
+          font: fontFamily,
+          fontSize: 7,
+          cellPadding: 3,
+          lineColor: [220, 220, 218],
+          lineWidth: 0.5,
+          textColor: [30, 30, 30],
+          overflow: 'linebreak',
+          valign: 'middle',
+        },
+        headStyles: {
+          fillColor: [26, 26, 26],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          fontSize: 7,
+          halign: 'left',
+          cellPadding: 3,
+        },
+        alternateRowStyles: {
+          fillColor: [252, 252, 250],
+        },
+        columnStyles: {
+          0: { cellWidth: 118 }, // Income NAME
+          1: { cellWidth: 44, halign: 'center' }, // Income MEAL
+          2: { cellWidth: 58, halign: 'right' }, // Income BALANCE
+          3: { cellWidth: 54, halign: 'right' }, // Income PAID
+          4: { cellWidth: 56, halign: 'right', fontStyle: 'bold' }, // Income TOTAL
+          5: { cellWidth: 103 }, // Expense DESCRIPTION
+          6: { cellWidth: 56 }, // Expense PAID BY
+          7: { cellWidth: 58, halign: 'right', fontStyle: 'bold' }, // Expense AMOUNT
+        },
+        didDrawCell: (data) => {
+          // Thicker vertical divider between INCOME (col 0-4) and EXPENSE (col 5-7)
+          if (data.column.index === 4) {
+            doc.setDrawColor(26, 26, 26);
+            doc.setLineWidth(1.5);
+            doc.line(
+              data.cell.x + data.cell.width,
+              data.cell.y,
+              data.cell.x + data.cell.width,
+              data.cell.y + data.cell.height
+            );
+          }
+        },
+        showHead: 'everyPage',
+        pageBreak: 'auto',
+      });
+
+      currentY = (doc as any).lastAutoTable.finalY + 11;
     }
   }
-
-  autoTable(doc, {
-    head: tableHead as any,
-    body: tableBody,
-    startY: currentY,
-    margin: { left: leftMargin, right: rightMargin, top: 32, bottom: 32 },
-    theme: 'grid',
-    styles: {
-      font: fontFamily,
-      fontSize: 7,
-      cellPadding: 3,
-      lineColor: [220, 220, 218],
-      lineWidth: 0.5,
-      textColor: [30, 30, 30],
-      overflow: 'linebreak',
-      valign: 'middle',
-    },
-    headStyles: {
-      fillColor: [26, 26, 26],
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      fontSize: 7,
-      halign: 'left',
-      cellPadding: 3,
-    },
-    alternateRowStyles: {
-      fillColor: [252, 252, 250],
-    },
-    columnStyles: {
-      0: { cellWidth: 105 }, // Income NAME
-      1: { cellWidth: 38, halign: 'center' }, // Income MEAL
-      2: { cellWidth: 52, halign: 'right' }, // Income BALANCE
-      3: { cellWidth: 52, halign: 'right' }, // Income PAID
-      4: { cellWidth: 52, halign: 'right', fontStyle: 'bold' }, // Income TOTAL
-      5: { cellWidth: 124 }, // Expense NAME
-      6: { cellWidth: 60 }, // Expense PAID BY
-      7: { cellWidth: 64, halign: 'right', fontStyle: 'bold' }, // Expense AMOUNT
-    },
-    didParseCell: (data) => {
-      if (maxRows === 0 && data.row.index === 0 && data.section === 'body') {
-        if (data.column.index === 0) {
-          data.cell.colSpan = 8;
-          data.cell.styles.halign = 'center';
-          data.cell.styles.textColor = [120, 120, 120];
-          data.cell.styles.fontStyle = 'italic';
-        }
-      }
-    },
-    didDrawCell: (data) => {
-      // Noticeably thicker vertical divider between INCOME (col 0-4) and EXPENSE (col 5-7)
-      if (data.column.index === 4) {
-        doc.setDrawColor(26, 26, 26);
-        doc.setLineWidth(1.5);
-        doc.line(
-          data.cell.x + data.cell.width,
-          data.cell.y,
-          data.cell.x + data.cell.width,
-          data.cell.y + data.cell.height
-        );
-      }
-    },
-    showHead: 'everyPage',
-    pageBreak: 'auto',
-  });
-
-  currentY = (doc as any).lastAutoTable.finalY + 12;
 
   // 1. Calculate partner totals
   const partnerTotals = calculatePartnerTotals(monthIncome, monthExpenses);
   const irshadData = partnerTotals.find((p) => p.partner.toUpperCase() === 'IRSHAD');
   const irshadToHotel = irshadData ? irshadData.toHotel : 0;
 
-  // 2. Draw Summary Box after ledger table
+  // 2. Draw Summary Box after ledger tables
   currentY = drawSummaryBox(
     doc,
     currentY,
@@ -1001,7 +1131,7 @@ export const generateMonthlyAccountsPdf = (
     totalPaid,
     totalExpense,
     closingBalance,
-    lastDateFormatted,
+    closingDateFormatted,
     irshadToHotel,
     fontFamily,
     leftMargin,
