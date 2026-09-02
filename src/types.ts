@@ -29,6 +29,7 @@ export interface PartnerCurrentBalance {
   name: string;
   balance_to_hotel: number;
   expenses_by_them: number;
+  net_balance?: number;
 }
 
 export interface IncomeEntryRow {

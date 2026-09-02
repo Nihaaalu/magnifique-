@@ -16,6 +16,10 @@ import {
   ExpenseCategory,
   SettlementType,
 } from '../types';
+import {
+  calculatePartnerNetBalances,
+  toPartnerCurrentBalances,
+} from '../utils/partnerBalanceUtils';
 
 /**
  * Supabase Data Access Layer
@@ -572,102 +576,23 @@ export async function deleteExpenseEntry(id: string): Promise<void> {
 // 4. PARTNER BALANCES (VIEW) & SETTLEMENTS
 // ==========================================
 export async function fetchPartnerCurrentBalances(): Promise<PartnerCurrentBalance[]> {
-  // Query partners, view data, and settlements independently to guarantee accuracy
-  const [partnersRes, viewRes, settlementsRes, incomeRes, expenseRes] = await Promise.all([
-    supabase.from('partners').select('id, name').order('name'),
-    supabase.from('partner_current_balances').select('*'),
-    supabase.from('partner_settlements').select('*'),
-    supabase.from('income_entries').select('balance_amount, balance_account_partner_id, by_who, payment_status'),
-    supabase.from('expense_entries').select('amount, paid_by, paid_by_partner_id'),
+  // Always recalculate partner balances dynamically from the raw underlying income entries,
+  // expense entries, settlements, and partners list without reusing stale snapshot views.
+  const [partners, incomeRecords, expenseRecords, settlements] = await Promise.all([
+    fetchPartners(),
+    fetchIncomeEntries(),
+    fetchExpenseEntries(),
+    fetchPartnerSettlements(),
   ]);
 
-  const rawPartners = partnersRes.data || [];
-  const rawViewBalances = viewRes.data || [];
-  const rawSettlements = settlementsRes.data || [];
-  const rawIncome = incomeRes.data || [];
-  const rawExpense = expenseRes.data || [];
+  const netBalances = calculatePartnerNetBalances(
+    incomeRecords,
+    expenseRecords,
+    settlements,
+    partners
+  );
 
-  // Filter out any partner named LOKESH and focus strictly on the 5 official partners
-  const result: PartnerCurrentBalance[] = OFFICIAL_PARTNER_NAMES.map((officialName) => {
-    // Find matching partner record from 'partners' table (match ANSARI, IRSHAD, MUSADDIQ/MUSSADDIQ, SATHISH, YOGESH)
-    const matchingPartner = rawPartners.find(
-      (p) => normalizePartnerName(p.name) === officialName
-    );
-    const partnerId = matchingPartner ? String(matchingPartner.id) : officialName;
-    const partnerName = officialName;
-
-    // 1. Initial / view balances for this partner
-    const viewRow = rawViewBalances.find(
-      (v: any) =>
-        (matchingPartner && String(v.partner_id) === String(matchingPartner.id)) ||
-        normalizePartnerName(v.name) === officialName
-    );
-
-    let baseBalanceToHotel = viewRow ? Number(viewRow.balance_to_hotel) || 0 : 0;
-    let baseExpensesByThem = viewRow ? Number(viewRow.expenses_by_them) || 0 : 0;
-
-    // Also sum from income entries if not represented in view
-    const incomeBalanceSum = rawIncome.reduce((acc: number, inc: any) => {
-      const bal = Number(inc.balance_amount) || 0;
-      if (bal <= 0) return acc;
-      const isMatchId = matchingPartner && String(inc.balance_account_partner_id) === String(matchingPartner.id);
-      const isMatchName = normalizePartnerName(inc.by_who || '') === officialName;
-      if (isMatchId || isMatchName) {
-        return acc + bal;
-      }
-      return acc;
-    }, 0);
-
-    const expensePaidSum = rawExpense.reduce((acc: number, exp: any) => {
-      const amt = Number(exp.amount) || 0;
-      if (amt <= 0) return acc;
-      const isMatchId = matchingPartner && String(exp.paid_by_partner_id) === String(matchingPartner.id);
-      const isMatchName = normalizePartnerName(exp.paid_by || '') === officialName;
-      if (isMatchId || isMatchName) {
-        return acc + amt;
-      }
-      return acc;
-    }, 0);
-
-    // Use highest of view or direct entry sum
-    const totalBalanceToHotel = Math.max(baseBalanceToHotel, incomeBalanceSum);
-    const totalExpensesByThem = Math.max(baseExpensesByThem, expensePaidSum);
-
-    // 2. Sum settlements for this partner
-    const partnerSettlements = rawSettlements.filter((s: any) => {
-      if (matchingPartner && String(s.partner_id) === String(matchingPartner.id)) return true;
-      return false;
-    });
-
-    const settlementsToHotel = partnerSettlements.reduce((sum: number, s: any) => {
-      const type = String(s.settlement_type).toLowerCase();
-      if (type === 'to_hotel' || type === 'balance_to_hotel') {
-        return sum + (Number(s.amount) || 0);
-      }
-      return sum;
-    }, 0);
-
-    const settlementsFromHotel = partnerSettlements.reduce((sum: number, s: any) => {
-      const type = String(s.settlement_type).toLowerCase();
-      if (type === 'from_hotel' || type === 'expenses_by_them') {
-        return sum + (Number(s.amount) || 0);
-      }
-      return sum;
-    }, 0);
-
-    // 3. Current net balances (never negative)
-    const netBalanceToHotel = Math.max(0, totalBalanceToHotel - settlementsToHotel);
-    const netExpensesByThem = Math.max(0, totalExpensesByThem - settlementsFromHotel);
-
-    return {
-      partner_id: partnerId,
-      name: partnerName,
-      balance_to_hotel: netBalanceToHotel,
-      expenses_by_them: netExpensesByThem,
-    };
-  });
-
-  return result;
+  return toPartnerCurrentBalances(netBalances);
 }
 
 export async function fetchPartnerSettlements(): Promise<PartnerSettlement[]> {
@@ -743,6 +668,18 @@ export async function createPartnerSettlement(
   }
 
   return data;
+}
+
+export async function deletePartnerSettlement(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('partner_settlements')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting partner settlement from Supabase:', error);
+    throw new Error(`Failed to delete partner settlement: ${error.message}`);
+  }
 }
 
 // ==========================================

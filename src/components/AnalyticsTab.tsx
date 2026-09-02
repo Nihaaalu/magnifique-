@@ -5,6 +5,7 @@ import {
   ProfitShareResult,
   AccountMonthRow,
   PartnerSettlement,
+  Partner,
 } from '../types';
 import {
   formatCurrency,
@@ -43,6 +44,7 @@ interface AnalyticsTabProps {
   expenseRecords: ExpenseRecord[];
   accountMonths?: AccountMonthRow[];
   partnerSettlements?: PartnerSettlement[];
+  partners?: Partner[];
   onCloseMonth?: (monthStr: string, closingBalance: number) => Promise<void>;
   onReopenMonth?: (monthStr: string) => Promise<void>;
   onLockApp?: () => void;
@@ -53,6 +55,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
   expenseRecords,
   accountMonths = [],
   partnerSettlements = [],
+  partners = [],
   onCloseMonth,
   onReopenMonth,
   onLockApp,
@@ -170,7 +173,8 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
         incomeRecords,
         expenseRecords,
         accountMonths,
-        partnerSettlements
+        partnerSettlements,
+        partners
       );
       const fileName = `MAGNIFIQUE_2.0_Daily_Accounts_${activeDate}.pdf`;
       doc.save(fileName);
@@ -199,7 +203,8 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
         incomeRecords,
         expenseRecords,
         accountMonths,
-        partnerSettlements
+        partnerSettlements,
+        partners
       );
       const fileName = `MAGNIFIQUE_2.0_Monthly_Accounts_${monthStr}.pdf`;
       doc.save(fileName);

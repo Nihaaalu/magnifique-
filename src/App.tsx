@@ -542,6 +542,7 @@ export default function App() {
             expenseRecords={expenseRecords}
             accountMonths={accountMonths}
             partnerSettlements={partnerSettlements}
+            partners={partners}
             onCloseMonth={handleCloseMonth}
             onReopenMonth={handleReopenMonth}
             onLockApp={handleLockApp}
