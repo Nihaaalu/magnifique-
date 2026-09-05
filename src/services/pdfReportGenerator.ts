@@ -965,10 +965,58 @@ export const generateMonthlyAccountsPdf = (
         formatPdfCurrency(dayTotalExpense),
       ]);
 
-      // Check remaining page space for Date Label + Table Header + at least 1 row (~54pt)
-      if (currentY + 54 > pageHeight - 32) {
-        doc.addPage();
-        currentY = 36;
+      // Calculate required vertical height for this complete date section:
+      // columns widths: [118, 44, 58, 54, 56, 103, 56, 58]
+      const colWidths = [118, 44, 58, 54, 56, 103, 56, 58];
+      doc.setFont(fontFamily, 'normal');
+      doc.setFontSize(7);
+
+      let estimatedRowsHeight = 0;
+      for (let rIdx = 0; rIdx < dayBody.length; rIdx++) {
+        const row = dayBody[rIdx];
+        let maxLines = 1;
+        if (row[0]) {
+          const lines0 = doc.splitTextToSize(String(row[0]), colWidths[0] - 8).length;
+          if (lines0 > maxLines) maxLines = lines0;
+        }
+        if (row[5]) {
+          const lines5 = doc.splitTextToSize(String(row[5]), colWidths[5] - 8).length;
+          if (lines5 > maxLines) maxLines = lines5;
+        }
+        estimatedRowsHeight += Math.max(15.5, 6.5 + maxLines * 8.5);
+      }
+
+      const dateHeadingHeight = 12; // Date label text + spacing
+      const tableHeadersHeight = 32; // Two header rows (INCOME/EXPENSE + column labels)
+      const safetyBuffer = 6; // Safety margin to prevent boundary split
+      const totalDateSectionHeight = dateHeadingHeight + tableHeadersHeight + estimatedRowsHeight + safetyBuffer;
+
+      // Usable bottom margin is 32pt (above footer line at pageHeight - 20)
+      const bottomLimit = pageHeight - 32;
+      const maxSinglePageHeight = bottomLimit - 36; // Maximum available height on a single fresh page (~774pt)
+
+      // Pagination Rules:
+      // 1. If a normal date section CAN fit on a single page (totalDateSectionHeight <= maxSinglePageHeight):
+      //    Keep the entire day together! If it doesn't fit in the remaining page space, move to the next page.
+      // 2. If a day's section itself is larger than one page (totalDateSectionHeight > maxSinglePageHeight):
+      //    Remove the restriction! Allow that day's section to continue naturally onto the next page.
+      //    Only move to the next page if there is not even minimal room (< 58pt) to cleanly start the day
+      //    with its heading, table headers, and initial rows.
+      if (totalDateSectionHeight <= maxSinglePageHeight) {
+        // Normal date: fits on a single page.
+        // If it cannot fit in remaining space on this page, move the ENTIRE date section to the next page.
+        if (currentY + totalDateSectionHeight > bottomLimit && currentY > 40) {
+          doc.addPage();
+          currentY = 36;
+        }
+      } else {
+        // Large single-day section: exceeds a single page.
+        // Allow it to span multiple pages naturally.
+        // Only start on a new page if the current page has almost no room left for heading + table headers + row (~58pt).
+        if (currentY + 58 > bottomLimit && currentY > 40) {
+          doc.addPage();
+          currentY = 36;
+        }
       }
 
       // Date Label Header (e.g. "1 SEPT • 01 Sept 2026") - Noticeably Bolder & Larger
@@ -987,13 +1035,15 @@ export const generateMonthlyAccountsPdf = (
       doc.setTextColor(40, 40, 40); // Noticeably bold dark gray/black
       doc.text(`•  ${fullDateMedium}`, leftMargin + dayHeaderWidth + 6, currentY + 6);
 
-      currentY += 10;
+      currentY += 12;
+
+      let pagesDrawnForTable = 0;
 
       autoTable(doc, {
         head: tableHead as any,
         body: dayBody,
         startY: currentY,
-        margin: { left: leftMargin, right: rightMargin, top: 32, bottom: 32 },
+        margin: { left: leftMargin, right: rightMargin, top: 48, bottom: 32 },
         theme: 'grid',
         styles: {
           font: fontFamily,
@@ -1046,6 +1096,25 @@ export const generateMonthlyAccountsPdf = (
               data.cell.x + data.cell.width,
               data.cell.y + data.cell.height
             );
+          }
+        },
+        didDrawPage: () => {
+          // Track pages rendered by this table
+          pagesDrawnForTable++;
+          // When a large single-day section spans onto subsequent page(s),
+          // repeat the date heading on the new page above the repeated table header.
+          if (pagesDrawnForTable > 1) {
+            doc.setFont(fontFamily, 'bold');
+            doc.setFontSize(10.5);
+            doc.setTextColor(180, 130, 20); // Warm Gold
+            doc.text(dayHeader, leftMargin, 42);
+
+            const dayHdrWidth = doc.getTextWidth(dayHeader);
+
+            doc.setFont(fontFamily, 'bold');
+            doc.setFontSize(9.5);
+            doc.setTextColor(40, 40, 40); // Noticeably bold dark gray/black
+            doc.text(`•  ${fullDateMedium}`, leftMargin + dayHdrWidth + 6, 42);
           }
         },
         showHead: 'everyPage',
