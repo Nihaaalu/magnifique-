@@ -563,7 +563,7 @@ export const generateDailyAccountsPdf = (
     ],
     [
       'NAME', 'MEAL', 'BALANCE', 'PAID', 'TOTAL',
-      'DESCRIPTION', 'PAID BY', 'AMOUNT',
+      'PARTICULARS', 'PAID BY', 'AMOUNT',
     ],
   ];
 
@@ -633,7 +633,7 @@ export const generateDailyAccountsPdf = (
       2: { cellWidth: 58, halign: 'right' }, // Income BALANCE
       3: { cellWidth: 54, halign: 'right' }, // Income PAID
       4: { cellWidth: 56, halign: 'right', fontStyle: 'bold' }, // Income TOTAL
-      5: { cellWidth: 103 }, // Expense DESCRIPTION
+      5: { cellWidth: 103 }, // Expense PARTICULARS
       6: { cellWidth: 56 }, // Expense PAID BY
       7: { cellWidth: 58, halign: 'right', fontStyle: 'bold' }, // Expense AMOUNT
     },
@@ -855,7 +855,7 @@ export const generateMonthlyAccountsPdf = (
       'BALANCE',
       'PAID',
       'TOTAL',
-      'DESCRIPTION',
+      'PARTICULARS',
       'PAID BY',
       'AMOUNT',
     ],
@@ -1072,7 +1072,7 @@ export const generateMonthlyAccountsPdf = (
           2: { cellWidth: 58, halign: 'right' }, // Income BALANCE
           3: { cellWidth: 54, halign: 'right' }, // Income PAID
           4: { cellWidth: 56, halign: 'right', fontStyle: 'bold' }, // Income TOTAL
-          5: { cellWidth: 103 }, // Expense DESCRIPTION
+          5: { cellWidth: 103 }, // Expense PARTICULARS
           6: { cellWidth: 56 }, // Expense PAID BY
           7: { cellWidth: 58, halign: 'right', fontStyle: 'bold' }, // Expense AMOUNT
         },
