@@ -458,7 +458,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
         breakfastPrice: isAlaCarte ? null : bPrice,
         lunchPrice: isAlaCarte ? null : lPrice,
         dinnerPrice: isAlaCarte ? null : dPrice,
-        byWho: isAlaCarte ? 'À LA CARTE' : editByWho.trim().toUpperCase(),
+        byWho: isAlaCarte ? 'À LA CARTE' : editByWho.trim(),
         travels: editTravels.trim() || undefined,
         membersCount: isAlaCarte ? 0 : (memberCount || 0),
         pricePerMember: isAlaCarte ? 0 : calculatedPricePerMember,

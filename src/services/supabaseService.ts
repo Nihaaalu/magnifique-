@@ -501,7 +501,7 @@ export async function createExpenseEntry(
     category: dbCategory,
     description: desc || null,
     amount: Number(expense.amount) || 0,
-    paid_by: isHotel ? 'HOTEL' : expense.paid_by.toUpperCase(),
+    paid_by: isHotel ? 'HOTEL' : expense.paid_by,
     paid_by_partner_id: isHotel ? null : (Number(expense.paid_by_partner_id) || expense.paid_by_partner_id),
   };
 
@@ -544,7 +544,7 @@ export async function updateExpenseEntry(
 
   if (expense.paid_by !== undefined) {
     const isHotel = !expense.paid_by || expense.paid_by.toUpperCase() === 'HOTEL';
-    updatePayload.paid_by = isHotel ? 'HOTEL' : expense.paid_by.toUpperCase();
+    updatePayload.paid_by = isHotel ? 'HOTEL' : expense.paid_by;
     updatePayload.paid_by_partner_id = isHotel ? null : (Number(expense.paid_by_partner_id) || expense.paid_by_partner_id);
   }
 

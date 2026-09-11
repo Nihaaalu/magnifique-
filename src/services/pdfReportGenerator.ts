@@ -319,7 +319,7 @@ const formatIncomeBalance = (inc: IncomeRecord): string => {
  * Use description if present, otherwise category
  */
 const formatExpenseName = (exp: ExpenseRecord): string => {
-  const name = (exp.name || '').trim();
+  const name = (exp.description || exp.name || '').trim();
   return name.length > 0 ? name : (exp.category || 'Expense');
 };
 

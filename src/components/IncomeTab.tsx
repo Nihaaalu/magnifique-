@@ -51,7 +51,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
   // Form State
   const defaultPartner = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
-  const [byWhoOption, setByWhoOption] = useState<string>(defaultPartner?.name?.toUpperCase() || 'IRSHAD');
+  const [byWhoOption, setByWhoOption] = useState<string>(defaultPartner?.name || 'Irshad');
   const [customByWho, setCustomByWho] = useState<string>('');
   const [travels, setTravels] = useState<string>('');
   const [entryDate, setEntryDate] = useState<string>(getTodayDateString());
@@ -106,8 +106,8 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // Dynamic Options from Supabase partners
-  const partnerNamesUpper = partners.map((p) => p.name.toUpperCase());
-  const byWhoOptions = [...partnerNamesUpper, 'Other'];
+  const partnerNames = partners.map((p) => p.name);
+  const byWhoOptions = [...partnerNames, 'Other'];
 
   const isAlaCarte = selectedPlan === 'alacarte';
 
@@ -189,7 +189,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
   const handleResetForm = () => {
     const irshad = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
-    setByWhoOption(irshad?.name?.toUpperCase() || 'IRSHAD');
+    setByWhoOption(irshad?.name || 'Irshad');
     setCustomByWho('');
     setTravels('');
     setMembersCount('');
@@ -306,7 +306,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     const resolvedByWho = isAlaCarte
       ? null
       : byWhoOption === 'Other'
-      ? customByWho.trim().toUpperCase()
+      ? customByWho.trim()
       : byWhoOption;
 
     let partnerIdForBalance: string | null = null;
