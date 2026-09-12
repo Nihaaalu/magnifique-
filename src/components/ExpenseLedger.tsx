@@ -209,8 +209,8 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
       await onUpdateExpense(editingRecord.id, {
         date: editDate,
         category: editCategory,
-        description: editName.trim() || null,
-        name: editName.trim() || undefined,
+        description: editName.trim().toUpperCase() || null,
+        name: editName.trim().toUpperCase() || undefined,
         amount: parsedAmount,
         paidBy: editPaidBy as any,
         paidByPartnerId: matchedPartner ? matchedPartner.id : null,
@@ -543,8 +543,9 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
                 <input
                   type="text"
                   value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                  onChange={(e) => setEditName(e.target.value.toUpperCase())}
+                  className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37] uppercase"
+                  style={{ textTransform: 'uppercase' }}
                 />
               </div>
 

@@ -458,8 +458,8 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
         breakfastPrice: isAlaCarte ? null : bPrice,
         lunchPrice: isAlaCarte ? null : lPrice,
         dinnerPrice: isAlaCarte ? null : dPrice,
-        byWho: isAlaCarte ? 'À LA CARTE' : editByWho.trim(),
-        travels: editTravels.trim() || undefined,
+        byWho: isAlaCarte ? 'À LA CARTE' : editByWho.trim().toUpperCase(),
+        travels: editTravels.trim().toUpperCase() || undefined,
         membersCount: isAlaCarte ? 0 : (memberCount || 0),
         pricePerMember: isAlaCarte ? 0 : calculatedPricePerMember,
         total: totalAmount,
@@ -930,8 +930,9 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                     <input
                       type="text"
                       value={editByWho}
-                      onChange={(e) => setEditByWho(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                      onChange={(e) => setEditByWho(e.target.value.toUpperCase())}
+                      className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37] uppercase"
+                      style={{ textTransform: 'uppercase' }}
                       required
                     />
                   </div>
@@ -1125,8 +1126,9 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                 <input
                   type="text"
                   value={editTravels}
-                  onChange={(e) => setEditTravels(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                  onChange={(e) => setEditTravels(e.target.value.toUpperCase())}
+                  className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37] uppercase"
+                  style={{ textTransform: 'uppercase' }}
                 />
               </div>
 

@@ -51,7 +51,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
   // Form State
   const defaultPartner = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
-  const [byWhoOption, setByWhoOption] = useState<string>(defaultPartner?.name || 'Irshad');
+  const [byWhoOption, setByWhoOption] = useState<string>(defaultPartner?.name?.toUpperCase() || 'IRSHAD');
   const [customByWho, setCustomByWho] = useState<string>('');
   const [travels, setTravels] = useState<string>('');
   const [entryDate, setEntryDate] = useState<string>(getTodayDateString());
@@ -106,8 +106,8 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // Dynamic Options from Supabase partners
-  const partnerNames = partners.map((p) => p.name);
-  const byWhoOptions = [...partnerNames, 'Other'];
+  const partnerNamesUpper = partners.map((p) => p.name.toUpperCase());
+  const byWhoOptions = [...partnerNamesUpper, 'Other'];
 
   const isAlaCarte = selectedPlan === 'alacarte';
 
@@ -189,7 +189,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
   const handleResetForm = () => {
     const irshad = partners.find((p) => p.name.toUpperCase() === 'IRSHAD') || partners[0];
-    setByWhoOption(irshad?.name || 'Irshad');
+    setByWhoOption(irshad?.name?.toUpperCase() || 'IRSHAD');
     setCustomByWho('');
     setTravels('');
     setMembersCount('');
@@ -306,7 +306,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     const resolvedByWho = isAlaCarte
       ? null
       : byWhoOption === 'Other'
-      ? customByWho.trim()
+      ? customByWho.trim().toUpperCase()
       : byWhoOption;
 
     let partnerIdForBalance: string | null = null;
@@ -358,7 +358,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         breakfast_price: bPriceToStore,
         lunch_price: lPriceToStore,
         dinner_price: dPriceToStore,
-        travel_name: travels.trim() || null,
+        travel_name: travels.trim().toUpperCase() || null,
         member_count: isAlaCarte ? null : countNum,
         total_amount: authoritativeTotal,
         amount_received: finalPaid,
@@ -580,8 +580,9 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                       id="income-travels-input"
                       placeholder="e.g. À La Carte Table 4 / Party"
                       value={travels}
-                      onChange={(e) => setTravels(e.target.value)}
-                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      onChange={(e) => setTravels(e.target.value.toUpperCase())}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors uppercase"
+                      style={{ textTransform: 'uppercase' }}
                     />
                   </div>
                 </div>
@@ -652,8 +653,9 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                       id="income-custom-by-who"
                       placeholder="Enter person name"
                       value={customByWho}
-                      onChange={(e) => setCustomByWho(e.target.value)}
-                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37]"
+                      onChange={(e) => setCustomByWho(e.target.value.toUpperCase())}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] uppercase"
+                      style={{ textTransform: 'uppercase' }}
                       required
                     />
                   </div>
@@ -669,8 +671,9 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                     id="income-travels-input"
                     placeholder="e.g. Royal Travels"
                     value={travels}
-                    onChange={(e) => setTravels(e.target.value)}
-                    className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    onChange={(e) => setTravels(e.target.value.toUpperCase())}
+                    className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors uppercase"
+                    style={{ textTransform: 'uppercase' }}
                   />
                 </div>
 

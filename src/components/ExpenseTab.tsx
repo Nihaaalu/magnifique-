@@ -83,7 +83,7 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
       await onAddExpense({
         expense_date: expenseDate || getTodayDateString(),
         category,
-        description: description.trim() || null,
+        description: description.trim().toUpperCase() || null,
         amount: parsedAmount,
         paid_by: paidBy,
         paid_by_partner_id: matchedPartner ? matchedPartner.id : null,
@@ -233,8 +233,9 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
                 id="expense-description-input"
                 placeholder={getPlaceholderForCategory(category)}
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                onChange={(e) => setDescription(e.target.value.toUpperCase())}
+                className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors uppercase"
+                style={{ textTransform: 'uppercase' }}
               />
             </div>
 
