@@ -42,6 +42,12 @@ import {
   Shield,
 } from 'lucide-react';
 import { ChangePinModal } from './ChangePinModal';
+import {
+  calculateIncomeDistribution,
+  calculateExpenseDistribution,
+  calculateMealCounts,
+} from '../utils/analyticsUtils';
+import { generateAnalyticsPDF } from '../services/analyticsPdfGenerator';
 
 interface AnalyticsTabProps {
   incomeRecords: IncomeRecord[];
@@ -241,6 +247,57 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
     } catch (err: any) {
       console.error('Failed to generate monthly accounts PDF:', err);
       setDownloadError(err.message || 'Failed to generate PDF report. Please try again.');
+    } finally {
+      setGeneratingType(null);
+    }
+  };
+
+  // 3. Download Restaurant Analytics PDF (using currently selected Analytics date range)
+  const handleDownloadRestaurantAnalyticsPdf = async () => {
+    const targetMonth = selectedMonth || selectedReportMonth;
+    if (generatingType || !targetMonth) return;
+    setGeneratingType('analytics');
+    setDownloadError(null);
+    setDownloadMsg(null);
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const monthIncome = incomeRecords.filter(
+        (r) => r.date && r.date.startsWith(targetMonth)
+      );
+      const monthExpense = expenseRecords.filter(
+        (r) => r.date && r.date.startsWith(targetMonth)
+      );
+
+      const [year, month] = targetMonth.split('-');
+      const daysInMonth = new Date(parseInt(year, 10), parseInt(month, 10), 0).getDate();
+      const startDate = `${targetMonth}-01`;
+      const endDate = `${targetMonth}-${daysInMonth.toString().padStart(2, '0')}`;
+      const periodLabel = `${formatPdfMonth(targetMonth)} (${startDate} to ${endDate})`;
+
+      // Unified calculation functions ensuring Analytics numbers match PDF numbers
+      const incomeResult = calculateIncomeDistribution(monthIncome);
+      const expenseResult = calculateExpenseDistribution(monthExpense);
+      const mealResult = calculateMealCounts(monthIncome);
+
+      await generateAnalyticsPDF({
+        incomeRecords: monthIncome,
+        expenseRecords: monthExpense,
+        dateRangeLabel: periodLabel,
+        startDate,
+        endDate,
+        incomeResult,
+        expenseResult,
+        mealResult,
+      });
+
+      const fileName = `Magnifique_Analytics_Report_${targetMonth}.pdf`;
+      setDownloadMsg(`Restaurant Analytics PDF downloaded successfully: ${fileName}`);
+      setTimeout(() => setDownloadMsg(null), 4000);
+    } catch (err: any) {
+      console.error('Failed to generate restaurant analytics PDF:', err);
+      setDownloadError(err.message || 'Failed to generate Restaurant Analytics PDF. Please try again.');
     } finally {
       setGeneratingType(null);
     }
@@ -461,34 +518,6 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 )}
               </button>
             </div>
-
-            {/* Daily Partner Running Balances (shown only if non-zero) */}
-            {dailyPartnerBalances.length > 0 && (
-              <div
-                id="daily-report-partner-balances"
-                className="pt-2 border-t border-[#222222] flex flex-wrap items-center gap-1.5"
-              >
-                <span className="text-[10px] text-[#777777] font-bold uppercase tracking-wider mr-1">
-                  Partner Balance:
-                </span>
-                {dailyPartnerBalances.map((pb) => (
-                  <span
-                    key={pb.partnerName}
-                    className="text-[11px] font-black px-2 py-0.5 rounded border"
-                    style={{
-                      backgroundColor:
-                        pb.direction === 'to_hotel'
-                          ? 'rgba(212, 175, 55, 0.1)'
-                          : 'rgba(74, 222, 128, 0.1)',
-                      borderColor: pb.direction === 'to_hotel' ? '#D4AF37' : '#4ade80',
-                      color: pb.direction === 'to_hotel' ? '#F2C94C' : '#4ade80',
-                    }}
-                  >
-                    {pb.displayLabel}: {formatCurrency(pb.displayAmount)}
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* 2. Monthly Accounts Selector */}
@@ -507,7 +536,10 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 <select
                   id="select-download-month"
                   value={selectedReportMonth}
-                  onChange={(e) => setSelectedReportMonth(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedReportMonth(e.target.value);
+                    setSelectedMonth(e.target.value);
+                  }}
                   disabled={availableMonths.length === 0}
                   className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
                 >
@@ -528,51 +560,23 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 id="btn-download-monthly-pdf"
                 onClick={() => handleDownloadMonth(selectedReportMonth)}
                 disabled={generatingType !== null || availableMonths.length === 0 || !selectedReportMonth}
-                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] px-4 py-2.5 rounded-lg font-black text-xs transition-all shadow-xs cursor-pointer min-h-[42px] shrink-0 ${
+                className={`w-full sm:w-auto flex items-center justify-center gap-1.5 bg-[#171717] hover:bg-[#222222] border border-[#2A2A2A] hover:border-[#D4AF37] text-[#B8B8B8] hover:text-[#F5F5F5] px-4 py-2.5 rounded-lg font-bold text-xs transition-all cursor-pointer min-h-[42px] shrink-0 ${
                   generatingType === selectedReportMonth ? 'opacity-80' : ''
                 } ${availableMonths.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
                 {generatingType === selectedReportMonth ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Generating PDF...</span>
+                    <span>Generating...</span>
                   </>
                 ) : (
                   <>
-                    <Download className="w-3.5 h-3.5" />
+                    <FileText className="w-3.5 h-3.5 text-[#D4AF37]" />
                     <span>Download Monthly PDF</span>
                   </>
                 )}
               </button>
             </div>
-
-            {/* Monthly Partner Running Balances (shown only if non-zero) */}
-            {monthlyPartnerBalances.length > 0 && (
-              <div
-                id="monthly-report-partner-balances"
-                className="pt-2 border-t border-[#222222] flex flex-wrap items-center gap-1.5"
-              >
-                <span className="text-[10px] text-[#777777] font-bold uppercase tracking-wider mr-1">
-                  Partner Balance:
-                </span>
-                {monthlyPartnerBalances.map((pb) => (
-                  <span
-                    key={pb.partnerName}
-                    className="text-[11px] font-black px-2 py-0.5 rounded border"
-                    style={{
-                      backgroundColor:
-                        pb.direction === 'to_hotel'
-                          ? 'rgba(212, 175, 55, 0.1)'
-                          : 'rgba(74, 222, 128, 0.1)',
-                      borderColor: pb.direction === 'to_hotel' ? '#D4AF37' : '#4ade80',
-                      color: pb.direction === 'to_hotel' ? '#F2C94C' : '#4ade80',
-                    }}
-                  >
-                    {pb.displayLabel}: {formatCurrency(pb.displayAmount)}
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       </section>
@@ -593,7 +597,10 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             <select
               id="select-summary-month"
               value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
+              onChange={(e) => {
+                setSelectedMonth(e.target.value);
+                setSelectedReportMonth(e.target.value);
+              }}
               disabled={availableMonths.length === 0}
               className="bg-[#111111] border border-[#2A2A2A] text-[#F5F5F5] text-xs font-bold px-2.5 py-1.5 rounded-md focus:outline-none focus:border-[#D4AF37] cursor-pointer"
             >
@@ -635,6 +642,32 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               )}
             </div>
           </div>
+
+          {/* TOP ACTION: DOWNLOAD RESTAURANT ANALYTICS PDF */}
+          <button
+            type="button"
+            id="btn-download-restaurant-analytics-pdf"
+            onClick={handleDownloadRestaurantAnalyticsPdf}
+            disabled={generatingType !== null || availableMonths.length === 0 || !selectedMonth}
+            className={`w-full flex items-center justify-center gap-2 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] px-4.5 py-2.5 rounded-lg font-black text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer min-h-[42px] ${
+              generatingType === 'analytics' ? 'opacity-80' : ''
+            } ${availableMonths.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
+          >
+            {generatingType === 'analytics' ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-[#0A0A0A]" />
+                <span>Generating Analytics PDF...</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4 text-[#0A0A0A]" />
+                <span>DOWNLOAD RESTAURANT ANALYTICS PDF</span>
+              </>
+            )}
+          </button>
+
+          {/* Subtle divider before summary boxes */}
+          <div className="border-t border-[#2A2A2A]" />
 
           {/* 6 Metric Cards for Monthly Summary */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
@@ -717,24 +750,39 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             </div>
           </div>
 
-          {/* Action Row: CLOSE BALANCE FOR THIS MONTH or Reopen */}
-          <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3">
+          {/* Download Monthly PDF Button (After Summary Boxes) */}
+          <div className="pt-1">
             <button
               type="button"
+              id="btn-download-summary-monthly-pdf"
               onClick={() => handleDownloadMonth(selectedMonth)}
               disabled={generatingType !== null || !selectedMonth}
-              className="w-full sm:w-auto px-4 py-2 bg-[#111111] hover:bg-[#1D1D1D] border border-[#2A2A2A] hover:border-[#D4AF37] text-[#F5F5F5] rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px]"
+              className={`w-full px-4 py-2.5 bg-[#111111] hover:bg-[#1D1D1D] border border-[#2A2A2A] hover:border-[#D4AF37] text-[#F5F5F5] rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px] transition-all ${
+                generatingType === selectedMonth ? 'opacity-80' : ''
+              }`}
             >
-              <FileText className="w-3.5 h-3.5 text-[#D4AF37]" />
-              <span>Download {formatPdfMonth(selectedMonth)} PDF</span>
+              {generatingType === selectedMonth ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D4AF37]" />
+                  <span>Generating...</span>
+                </>
+              ) : (
+                <>
+                  <FileText className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>Download {formatPdfMonth(selectedMonth)} PDF</span>
+                </>
+              )}
             </button>
+          </div>
 
+          {/* Consequential Action with clear separation & subtle divider */}
+          <div className="pt-5 sm:pt-6 border-t border-[#2A2A2A]">
             {!currentSummary.isClosed ? (
               <button
                 type="button"
                 id="btn-close-month"
                 onClick={() => handleInitiateClose(selectedMonth)}
-                className="w-full sm:w-auto px-4 py-2 bg-[#201212] hover:bg-[#3d1d1d] border border-[#f87171]/40 text-[#f87171] rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px] transition-all"
+                className="w-full px-4 py-2.5 bg-[#201212] hover:bg-[#3d1d1d] border border-[#f87171]/40 text-[#f87171] rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
               >
                 <Lock className="w-3.5 h-3.5" />
                 <span>CLOSE BALANCE FOR THIS MONTH</span>
@@ -742,10 +790,11 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             ) : (
               <button
                 type="button"
+                id="btn-reopen-month"
                 onClick={() => handleReopenMonth(selectedMonth)}
-                className="w-full sm:w-auto px-3 py-1.5 bg-[#111111] hover:bg-[#1D1D1D] border border-[#2A2A2A] text-[#B8B8B8] hover:text-[#F5F5F5] rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full px-4 py-2.5 bg-[#111111] hover:bg-[#1D1D1D] border border-[#2A2A2A] text-[#B8B8B8] hover:text-[#F5F5F5] rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
               >
-                <Unlock className="w-3 h-3 text-[#D4AF37]" />
+                <Unlock className="w-3.5 h-3.5 text-[#D4AF37]" />
                 <span>Re-open Month</span>
               </button>
             )}

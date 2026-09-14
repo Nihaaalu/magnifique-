@@ -24,6 +24,8 @@ import {
   fetchPartnerCurrentBalances,
   fetchPartnerSettlements,
   createPartnerSettlement,
+  updatePartnerSettlement,
+  deletePartnerSettlement,
   createIncomePaymentSettlement,
   fetchAccountMonths,
   getOrCreateAccountMonth,
@@ -369,16 +371,33 @@ export default function App() {
   };
 
   // Partner Settlement Operations
-  const handleAddSettlement = async (
-    settlement: Omit<PartnerSettlementRow, 'id' | 'created_at'>
-  ) => {
-    await createPartnerSettlement(settlement);
+  const refreshPartnerData = async () => {
     const [updatedSettlements, updatedBalances] = await Promise.all([
       fetchPartnerSettlements(),
       fetchPartnerCurrentBalances(),
     ]);
     setPartnerSettlements(updatedSettlements);
     setPartnerBalances(updatedBalances);
+  };
+
+  const handleAddSettlement = async (
+    settlement: Omit<PartnerSettlementRow, 'id' | 'created_at'>
+  ) => {
+    await createPartnerSettlement(settlement);
+    await refreshPartnerData();
+  };
+
+  const handleUpdateSettlement = async (
+    id: string,
+    settlement: Partial<Omit<PartnerSettlementRow, 'id' | 'created_at'>>
+  ) => {
+    await updatePartnerSettlement(id, settlement);
+    await refreshPartnerData();
+  };
+
+  const handleDeleteSettlement = async (id: string) => {
+    await deletePartnerSettlement(id);
+    await refreshPartnerData();
   };
 
   // Month Close / Reopen Operations
@@ -503,6 +522,8 @@ export default function App() {
             partnerBalances={partnerBalances}
             partnerSettlements={partnerSettlements}
             onAddSettlement={handleAddSettlement}
+            onUpdateSettlement={handleUpdateSettlement}
+            onDeleteSettlement={handleDeleteSettlement}
             isLoading={isLoading}
           />
         )}

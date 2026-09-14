@@ -195,7 +195,7 @@ export async function fetchIncomeEntries(): Promise<IncomeRecord[]> {
       lunchPrice: lPrice,
       dinnerPrice: dPrice,
       mealType: mappedMealType,
-      byWho: isAlaCarte ? 'À LA CARTE' : (row.by_who || 'IRSHAD'),
+      byWho: isAlaCarte ? 'À LA CARTE' : (row.by_who != null && String(row.by_who).trim() !== '' ? String(row.by_who).trim() : ''),
       travels: row.travel_name || undefined,
       membersCount: isAlaCarte ? 0 : (Number(row.member_count) || 0),
       pricePerMember,
@@ -665,6 +665,42 @@ export async function createPartnerSettlement(
   if (error) {
     console.error('Error inserting partner settlement in Supabase:', error);
     throw new Error(`Failed to create settlement: ${error.message}`);
+  }
+
+  return data;
+}
+
+export async function updatePartnerSettlement(
+  id: string,
+  settlement: Partial<Omit<PartnerSettlementRow, 'id' | 'created_at'>>
+): Promise<any> {
+  const updatePayload: any = {};
+  if (settlement.settlement_date !== undefined) {
+    updatePayload.settlement_date = settlement.settlement_date;
+  }
+  if (settlement.amount !== undefined) {
+    updatePayload.amount = Number(settlement.amount) || 0;
+  }
+  if (settlement.settlement_type !== undefined) {
+    const isToHotel =
+      settlement.settlement_type === 'balance_to_hotel' ||
+      settlement.settlement_type === 'to_hotel';
+    updatePayload.settlement_type = isToHotel ? 'to_hotel' : 'from_hotel';
+  }
+  if (settlement.notes !== undefined) {
+    updatePayload.notes = settlement.notes ? settlement.notes.trim() : null;
+  }
+
+  const { data, error } = await supabase
+    .from('partner_settlements')
+    .update(updatePayload)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating partner settlement in Supabase:', error);
+    throw new Error(`Failed to update partner settlement: ${error.message}`);
   }
 
   return data;
