@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   IncomeRecord,
   ExpenseRecord,
@@ -93,6 +93,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   const [editLunchPrice, setEditLunchPrice] = useState<string>('');
   const [editDinnerPrice, setEditDinnerPrice] = useState<string>('');
   const [editTotal, setEditTotal] = useState<string>('');
+  const [hasManuallyEditedTotal, setHasManuallyEditedTotal] = useState(false);
   const [editPaymentStatus, setEditPaymentStatus] = useState<PaymentStatus>('Paid Full');
   const [editAmountPaid, setEditAmountPaid] = useState<string>('');
   const [editBalancePartnerId, setEditBalancePartnerId] = useState<string>('');
@@ -307,6 +308,45 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     };
   };
 
+  const computedMealTotal = useMemo(() => {
+    if (editPlan === 'alacarte') return 0;
+    const m = parseInt(editMembers, 10) || 0;
+    const bP = parseFloat(editBreakfastPrice) || 0;
+    const lP = parseFloat(editLunchPrice) || 0;
+    const dP = parseFloat(editDinnerPrice) || 0;
+
+    if (editPlan === '1_time') {
+      if (editOneTimeMeal === 'lunch') return m * lP;
+      if (editOneTimeMeal === 'dinner') return m * dP;
+      return m * bP;
+    }
+    if (editPlan === '2_time') {
+      if (editTwoTimeCombo === 'breakfast_lunch') return m * (bP + lP);
+      if (editTwoTimeCombo === 'breakfast_dinner') return m * (bP + dP);
+      return m * (lP + dP);
+    }
+    if (editPlan === '3_time') {
+      return m * (bP + lP + dP);
+    }
+    return 0;
+  }, [
+    editPlan,
+    editMembers,
+    editBreakfastPrice,
+    editLunchPrice,
+    editDinnerPrice,
+    editOneTimeMeal,
+    editTwoTimeCombo,
+  ]);
+
+  useEffect(() => {
+    if (editingRecord && editPlan !== 'alacarte' && !hasManuallyEditedTotal) {
+      if (computedMealTotal > 0) {
+        setEditTotal(String(computedMealTotal));
+      }
+    }
+  }, [computedMealTotal, editingRecord, editPlan, hasManuallyEditedTotal]);
+
   const handleOpenEdit = (record: IncomeRecord) => {
     setEditingRecord(record);
     setEditDate(record.date);
@@ -324,6 +364,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
       setEditLunchPrice('');
       setEditDinnerPrice('');
       setEditTotal(String(record.total));
+      setHasManuallyEditedTotal(false);
     } else {
       const plan = record.mealPlan || '1_time';
       setEditPlan(plan);
@@ -331,15 +372,27 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
       setEditMembers(record.membersCount ? String(record.membersCount) : '');
       setEditTotal(String(record.total));
 
+      let initialCalculated = 0;
+      const m = record.membersCount || 0;
+      const bP = record.breakfastPrice || 0;
+      const lP = record.lunchPrice || 0;
+      const dP = record.dinnerPrice || 0;
+
       if (plan === '1_time') {
         const meal = (record.mealCombination as OneTimeMeal) || (record.mealType?.toLowerCase() as OneTimeMeal) || 'breakfast';
         setEditOneTimeMeal(meal === 'lunch' || meal === 'dinner' ? meal : 'breakfast');
         if (meal === 'lunch') {
-          setEditLunchPrice(record.lunchPrice ? String(record.lunchPrice) : String(record.pricePerMember || ''));
+          const price = record.lunchPrice ? String(record.lunchPrice) : String(record.pricePerMember || '');
+          setEditLunchPrice(price);
+          initialCalculated = m * (parseFloat(price) || 0);
         } else if (meal === 'dinner') {
-          setEditDinnerPrice(record.dinnerPrice ? String(record.dinnerPrice) : String(record.pricePerMember || ''));
+          const price = record.dinnerPrice ? String(record.dinnerPrice) : String(record.pricePerMember || '');
+          setEditDinnerPrice(price);
+          initialCalculated = m * (parseFloat(price) || 0);
         } else {
-          setEditBreakfastPrice(record.breakfastPrice ? String(record.breakfastPrice) : String(record.pricePerMember || ''));
+          const price = record.breakfastPrice ? String(record.breakfastPrice) : String(record.pricePerMember || '');
+          setEditBreakfastPrice(price);
+          initialCalculated = m * (parseFloat(price) || 0);
         }
       } else if (plan === '2_time') {
         const combo = (record.mealCombination as TwoTimeCombo) || 'breakfast_lunch';
@@ -347,11 +400,17 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
         setEditBreakfastPrice(record.breakfastPrice ? String(record.breakfastPrice) : '');
         setEditLunchPrice(record.lunchPrice ? String(record.lunchPrice) : '');
         setEditDinnerPrice(record.dinnerPrice ? String(record.dinnerPrice) : '');
+        if (combo === 'breakfast_lunch') initialCalculated = m * (bP + lP);
+        else if (combo === 'breakfast_dinner') initialCalculated = m * (bP + dP);
+        else initialCalculated = m * (lP + dP);
       } else if (plan === '3_time') {
         setEditBreakfastPrice(record.breakfastPrice ? String(record.breakfastPrice) : '');
         setEditLunchPrice(record.lunchPrice ? String(record.lunchPrice) : '');
         setEditDinnerPrice(record.dinnerPrice ? String(record.dinnerPrice) : '');
+        initialCalculated = m * (bP + lP + dP);
       }
+
+      setHasManuallyEditedTotal(record.total !== initialCalculated);
     }
 
     setEditTravels(record.travels || '');
@@ -397,15 +456,12 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
           if (editOneTimeMeal === 'breakfast') {
             bPrice = bP;
             calculatedPricePerMember = bP;
-            totalAmount = memberCount * bP;
           } else if (editOneTimeMeal === 'lunch') {
             lPrice = lP;
             calculatedPricePerMember = lP;
-            totalAmount = memberCount * lP;
           } else {
             dPrice = dP;
             calculatedPricePerMember = dP;
-            totalAmount = memberCount * dP;
           }
         } else if (editPlan === '2_time') {
           mealCombo = editTwoTimeCombo;
@@ -413,17 +469,14 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
             bPrice = bP;
             lPrice = lP;
             calculatedPricePerMember = bP + lP;
-            totalAmount = memberCount * (bP + lP);
           } else if (editTwoTimeCombo === 'breakfast_dinner') {
             bPrice = bP;
             dPrice = dP;
             calculatedPricePerMember = bP + dP;
-            totalAmount = memberCount * (bP + dP);
           } else {
             lPrice = lP;
             dPrice = dP;
             calculatedPricePerMember = lP + dP;
-            totalAmount = memberCount * (lP + dP);
           }
         } else if (editPlan === '3_time') {
           mealCombo = 'all';
@@ -431,8 +484,13 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
           lPrice = lP;
           dPrice = dP;
           calculatedPricePerMember = bP + lP + dP;
-          totalAmount = memberCount * (bP + lP + dP);
         }
+
+        const manualTotal = parseFloat(editTotal);
+        if (isNaN(manualTotal) || manualTotal <= 0) {
+          throw new Error('Total Amount must be greater than 0.');
+        }
+        totalAmount = manualTotal;
       }
 
       let amountReceived = 0;
@@ -1107,6 +1165,43 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {/* Calculated Total Display */}
+                  <div className="flex items-center justify-between px-3 py-2 bg-[#111111] border border-[#2A2A2A] rounded">
+                    <span className="text-[11px] text-[#A0A0A0] font-medium">Calculated Total:</span>
+                    <span className="text-xs text-[#F5F5F5] font-bold">
+                      {formatCurrency(computedMealTotal)}
+                    </span>
+                  </div>
+
+                  {/* Total Amount (Editable) */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] text-[#D4AF37] font-semibold">Total Amount (₹)</label>
+                      {computedMealTotal > 0 && String(computedMealTotal) !== editTotal && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHasManuallyEditedTotal(false);
+                            setEditTotal(String(computedMealTotal));
+                          }}
+                          className="text-[10px] text-[#D4AF37] hover:underline cursor-pointer"
+                        >
+                          Use Calculated ({formatCurrency(computedMealTotal)})
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      value={editTotal}
+                      onChange={(e) => {
+                        setHasManuallyEditedTotal(true);
+                        setEditTotal(e.target.value);
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                      required
+                    />
+                  </div>
                 </div>
               ) : (
                 <div>
