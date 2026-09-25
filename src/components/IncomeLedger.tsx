@@ -93,6 +93,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   const [editLunchPrice, setEditLunchPrice] = useState<string>('');
   const [editDinnerPrice, setEditDinnerPrice] = useState<string>('');
   const [editOtherPrice, setEditOtherPrice] = useState<string>('');
+  const [editOtherName, setEditOtherName] = useState<string>('');
   const [editTotal, setEditTotal] = useState<string>('');
   const [hasManuallyEditedTotal, setHasManuallyEditedTotal] = useState(false);
   const [editPaymentStatus, setEditPaymentStatus] = useState<PaymentStatus>('Paid Full');
@@ -259,10 +260,11 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     }
 
     if (record.mealPlan === 'other') {
+      const customName = (record.mealType ? String(record.mealType).trim().toUpperCase() : '') || 'OTHER';
       const partnerStr = record.byWho ? `- ${record.byWho}` : '';
-      const paxStr = record.membersCount > 0 ? `(${record.membersCount} PAX)` : '';
-      const title = ['OTHER', paxStr, partnerStr].filter(Boolean).join(' ');
-      const priceLine = record.pricePerMember ? `₹${record.pricePerMember} / person` : (record.travels || `Total: ${formatCurrency(record.total)}`);
+      const paxStr = record.membersCount > 0 ? `(${record.membersCount})` : '';
+      const title = [customName, paxStr, partnerStr].filter(Boolean).join(' ');
+      const priceLine = record.pricePerMember ? `₹${record.pricePerMember} / person` : `Total: ${formatCurrency(record.total)}`;
       return {
         title,
         priceLine,
@@ -377,6 +379,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
 
     if (isAlaCarte) {
       setEditPlan('alacarte');
+      setEditOtherName('');
       setEditByWho('');
       setEditMembers('');
       setEditBreakfastPrice('');
@@ -387,6 +390,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
       setHasManuallyEditedTotal(false);
     } else if (record.mealPlan === 'other') {
       setEditPlan('other');
+      setEditOtherName(record.mealType ? String(record.mealType).trim().toUpperCase() : '');
       setEditByWho(record.byWho || 'IRSHAD');
       setEditMembers(record.membersCount ? String(record.membersCount) : '');
       const oP = record.pricePerMember ? String(record.pricePerMember) : '';
@@ -398,6 +402,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
       const initialCalculated = (record.membersCount || 0) * (parseFloat(oP) || 0);
       setHasManuallyEditedTotal(record.total !== initialCalculated);
     } else {
+      setEditOtherName('');
       setEditOtherPrice('');
       const plan = record.mealPlan || '1_time';
       setEditPlan(plan);
@@ -475,6 +480,9 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
           throw new Error('Total Amount must be greater than 0.');
         }
       } else if (editPlan === 'other') {
+        if (!editOtherName.trim()) {
+          throw new Error('Please enter Name for this income entry (e.g. TEA).');
+        }
         memberCount = parseInt(editMembers, 10) || 0;
         if (memberCount <= 0) {
           throw new Error('Members count must be greater than 0.');
@@ -560,6 +568,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
         date: editDate,
         incomeType: isAlaCarte ? 'À La Carte' : 'Meal',
         mealPlan: editPlan,
+        mealType: editPlan === 'other' ? editOtherName.trim().toUpperCase() : (isAlaCarte ? null : (editingRecord.mealType || null)),
         mealCombination: isAlaCarte || editPlan === 'other' ? null : mealCombo,
         breakfastPrice: isAlaCarte || editPlan === 'other' ? null : bPrice,
         lunchPrice: isAlaCarte || editPlan === 'other' ? null : lPrice,
@@ -649,9 +658,18 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
           </div>
 
           {/* Middle Line: Simplified Prices Breakdown / Travels */}
-          {details.priceLine && (
-            <div className="text-[11px] font-medium text-[#D4AF37]">
-              {details.priceLine}
+          {(details.travels || details.priceLine) && (
+            <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+              {details.travels && (
+                <span className="font-semibold text-[#E0E0E0] bg-[#222222] px-1.5 py-0.5 rounded border border-[#333333]">
+                  {details.travels}
+                </span>
+              )}
+              {details.priceLine && (
+                <span className="font-medium text-[#D4AF37]">
+                  {details.priceLine}
+                </span>
+              )}
             </div>
           )}
 
@@ -1046,6 +1064,24 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                 )}
               </div>
 
+              {/* Name (Required for OTHER) */}
+              {editPlan === 'other' && (
+                <div>
+                  <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">
+                    Name <span className="text-[#f87171]">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editOtherName}
+                    onChange={(e) => setEditOtherName(e.target.value.toUpperCase())}
+                    placeholder="e.g. TEA, SNACKS, PARTY"
+                    className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37] uppercase font-semibold"
+                    style={{ textTransform: 'uppercase' }}
+                    required
+                  />
+                </div>
+              )}
+
               {/* Members & Prices for Meals */}
               {editPlan !== 'alacarte' ? (
                 <div className="space-y-2">
@@ -1281,11 +1317,20 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
               )}
 
               <div>
-                <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Travels / Description (Optional)</label>
+                <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">
+                  {editPlan === 'other' ? (
+                    <>
+                      Traveller <span className="text-[#777777] font-normal">(optional)</span>
+                    </>
+                  ) : (
+                    'Travels / Description (Optional)'
+                  )}
+                </label>
                 <input
                   type="text"
                   value={editTravels}
                   onChange={(e) => setEditTravels(e.target.value.toUpperCase())}
+                  placeholder={editPlan === 'other' ? 'Name' : ''}
                   className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37] uppercase"
                   style={{ textTransform: 'uppercase' }}
                 />

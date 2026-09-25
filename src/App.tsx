@@ -269,7 +269,9 @@ export default function App() {
     if (updates.breakfastPrice !== undefined) rowUpdates.breakfast_price = updates.breakfastPrice;
     if (updates.lunchPrice !== undefined) rowUpdates.lunch_price = updates.lunchPrice;
     if (updates.dinnerPrice !== undefined) rowUpdates.dinner_price = updates.dinnerPrice;
-    if (updates.mealType !== undefined) rowUpdates.meal_type = updates.mealType;
+    if (updates.mealType !== undefined) {
+      rowUpdates.meal_type = updates.mealType ? String(updates.mealType).trim().toUpperCase() : null;
+    }
     if (updates.byWho !== undefined) rowUpdates.by_who = updates.byWho;
     if (updates.travels !== undefined) rowUpdates.travel_name = updates.travels || null;
     if (updates.membersCount !== undefined) rowUpdates.member_count = updates.membersCount;
@@ -277,7 +279,12 @@ export default function App() {
     if (updates.total !== undefined) rowUpdates.total_amount = updates.total;
     if (updates.amountPaid !== undefined) rowUpdates.amount_received = updates.amountPaid;
     if (updates.paymentStatus !== undefined) {
-      rowUpdates.payment_status = updates.paymentStatus === 'Paid Full' ? 'Paid Full' : 'Balance';
+      rowUpdates.payment_status =
+        updates.paymentStatus === 'Paid Full'
+          ? 'Paid Full'
+          : updates.paymentStatus === 'Paid Partially'
+          ? 'paid_partial'
+          : 'Balance';
     }
     if (updates.balanceAccountPartnerId !== undefined) {
       rowUpdates.balance_account_partner_id = updates.balanceAccountPartnerId;

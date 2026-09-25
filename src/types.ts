@@ -65,7 +65,7 @@ export interface IncomeRecord {
   breakfastPrice?: number | null;
   lunchPrice?: number | null;
   dinnerPrice?: number | null;
-  mealType?: MealType | null;
+  mealType?: MealType | string | null;
   byWho: string;
   travels?: string;
   membersCount: number;

@@ -63,6 +63,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const [dinnerPrice, setDinnerPrice] = useState<string>('');
 
   // OTHER income input
+  const [otherName, setOtherName] = useState<string>('');
   const [otherPrice, setOtherPrice] = useState<string>('');
 
   // Editable Total Amount state (Meal bookings and À La Carte)
@@ -203,6 +204,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     setBreakfastPrice('');
     setLunchPrice('');
     setDinnerPrice('');
+    setOtherName('');
     setOtherPrice('');
     setManualTotalAmount('');
     setTotalAmountInput('');
@@ -255,6 +257,11 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     } else if (isOther) {
       if (byWhoOption === 'Other' && !customByWho.trim()) {
         setValidationError('Please enter a name for By Who.');
+        return;
+      }
+
+      if (!otherName.trim()) {
+        setValidationError('Please enter Name for this income entry (e.g. TEA).');
         return;
       }
 
@@ -384,6 +391,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         entry_date: entryDate || getTodayDateString(),
         income_type: isAlaCarte ? 'alacarte' : 'meal',
         meal_plan: selectedPlan,
+        meal_type: isOther ? otherName.trim().toUpperCase() : null,
         meal_combination: isOther ? null : mealComboToStore,
         breakfast_price: isOther ? null : bPriceToStore,
         lunch_price: isOther ? null : lPriceToStore,
@@ -693,6 +701,23 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                   </div>
                 )}
 
+                {/* Name (Required) */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                    Name <span className="text-[#f87171]">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="income-other-name-input"
+                    placeholder="e.g. TEA, SNACKS, PARTY"
+                    value={otherName}
+                    onChange={(e) => setOtherName(e.target.value.toUpperCase())}
+                    className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors uppercase"
+                    style={{ textTransform: 'uppercase' }}
+                    required
+                  />
+                </div>
+
                 {/* Traveller (Optional) */}
                 <div>
                   <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
@@ -701,7 +726,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                   <input
                     type="text"
                     id="income-other-travels-input"
-                    placeholder="e.g. Tea / Snacks / Group"
+                    placeholder="Name"
                     value={travels}
                     onChange={(e) => setTravels(e.target.value.toUpperCase())}
                     className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors uppercase"

@@ -247,8 +247,9 @@ const formatMealColumn = (inc: IncomeRecord): string => {
   }
 
   if (inc.mealPlan === 'other') {
+    const customName = (inc.mealType ? String(inc.mealType).trim().toUpperCase() : '') || 'OTHER';
     const count = inc.membersCount || 0;
-    return count > 0 ? `OTHER (${count})` : 'OTHER';
+    return count > 0 ? `${customName} (${count})` : customName;
   }
 
   let code = 'B';

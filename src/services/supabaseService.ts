@@ -177,13 +177,18 @@ export async function fetchIncomeEntries(): Promise<IncomeRecord[]> {
       }
     }
 
-    // Legacy meal_type for backward compatibility
-    let mappedMealType: MealType | null = null;
+    // meal_type mapping: For 'other', meal_type stores the custom Name (e.g. 'TEA')
+    let mappedMealType: string | null = null;
     if (row.meal_type) {
-      const mt = String(row.meal_type).toLowerCase();
-      if (mt === 'breakfast') mappedMealType = 'Breakfast';
-      else if (mt === 'lunch') mappedMealType = 'Lunch';
-      else if (mt === 'dinner') mappedMealType = 'Dinner';
+      if (mealPlan === 'other') {
+        mappedMealType = String(row.meal_type).trim().toUpperCase();
+      } else {
+        const mt = String(row.meal_type).toLowerCase();
+        if (mt === 'breakfast') mappedMealType = 'Breakfast';
+        else if (mt === 'lunch') mappedMealType = 'Lunch';
+        else if (mt === 'dinner') mappedMealType = 'Dinner';
+        else mappedMealType = String(row.meal_type);
+      }
     }
 
     return {
@@ -259,7 +264,11 @@ export async function createIncomeEntry(
     breakfast_price: isAlaCarte || isOther ? null : bPrice,
     lunch_price: isAlaCarte || isOther ? null : lPrice,
     dinner_price: isAlaCarte || isOther ? null : dPrice,
-    meal_type: isAlaCarte || isOther ? null : dbMealType,
+    meal_type: isAlaCarte
+      ? null
+      : isOther
+      ? (entry.meal_type && entry.meal_type.trim().toUpperCase() !== 'OTHER' ? entry.meal_type.trim().toUpperCase() : null)
+      : dbMealType,
     total_amount: totalAmount,
     amount_received: amountReceived,
     payment_status: dbPaymentStatus,
@@ -330,7 +339,12 @@ export async function updateIncomeEntry(
     updatePayload.member_count = null;
     updatePayload.price_per_member = null;
   } else if (isOther) {
-    updatePayload.meal_type = null;
+    if (entry.meal_type !== undefined) {
+      updatePayload.meal_type =
+        entry.meal_type && entry.meal_type.trim().toUpperCase() !== 'OTHER'
+          ? entry.meal_type.trim().toUpperCase()
+          : null;
+    }
     updatePayload.meal_combination = null;
     updatePayload.breakfast_price = null;
     updatePayload.lunch_price = null;
