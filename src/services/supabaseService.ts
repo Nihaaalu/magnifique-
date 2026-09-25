@@ -167,6 +167,8 @@ export async function fetchIncomeEntries(): Promise<IncomeRecord[]> {
     if (!isAlaCarte) {
       if (mealPlan === '1_time') {
         pricePerMember = bPrice || lPrice || dPrice || Number(row.price_per_member) || 0;
+      } else if (mealPlan === 'other') {
+        pricePerMember = Number(row.price_per_member) || 0;
       } else {
         pricePerMember = (bPrice || 0) + (lPrice || 0) + (dPrice || 0);
         if (pricePerMember === 0 && row.price_per_member) {
@@ -218,6 +220,7 @@ export async function createIncomeEntry(
     entry.income_type === 'alacarte' ||
     entry.income_type === 'À La Carte' ||
     String(entry.income_type).toLowerCase() === 'alacarte';
+  const isOther = entry.meal_plan === 'other';
 
   const totalAmount = Number(entry.total_amount) || 0;
   const amountReceived = Number(entry.amount_received) || 0;
@@ -238,9 +241,9 @@ export async function createIncomeEntry(
   const dPrice = entry.dinner_price != null ? Number(entry.dinner_price) : null;
   const sumPrices = (bPrice || 0) + (lPrice || 0) + (dPrice || 0);
 
-  // DB meal_type check constraint: 'breakfast' | 'lunch' | 'dinner' (MUST be NULL for alacarte)
+  // DB meal_type check constraint: 'breakfast' | 'lunch' | 'dinner' (MUST be NULL for alacarte or other)
   let dbMealType: 'breakfast' | 'lunch' | 'dinner' | null = null;
-  if (!isAlaCarte) {
+  if (!isAlaCarte && !isOther) {
     if (entry.meal_combination === 'lunch') dbMealType = 'lunch';
     else if (entry.meal_combination === 'dinner') dbMealType = 'dinner';
     else if (entry.meal_combination === 'lunch_dinner') dbMealType = 'lunch';
@@ -251,19 +254,19 @@ export async function createIncomeEntry(
   const insertPayload: Record<string, any> = {
     entry_date: entry.entry_date,
     income_type: isAlaCarte ? 'alacarte' : 'meal',
-    meal_plan: isAlaCarte ? 'alacarte' : entry.meal_plan,
-    meal_combination: isAlaCarte ? null : entry.meal_combination,
-    breakfast_price: isAlaCarte ? null : bPrice,
-    lunch_price: isAlaCarte ? null : lPrice,
-    dinner_price: isAlaCarte ? null : dPrice,
-    meal_type: isAlaCarte ? null : dbMealType,
+    meal_plan: entry.meal_plan,
+    meal_combination: isAlaCarte || isOther ? null : entry.meal_combination,
+    breakfast_price: isAlaCarte || isOther ? null : bPrice,
+    lunch_price: isAlaCarte || isOther ? null : lPrice,
+    dinner_price: isAlaCarte || isOther ? null : dPrice,
+    meal_type: isAlaCarte || isOther ? null : dbMealType,
     total_amount: totalAmount,
     amount_received: amountReceived,
     payment_status: dbPaymentStatus,
     by_who: isAlaCarte ? null : (entry.by_who || 'IRSHAD'),
     travel_name: entry.travel_name || null,
     member_count: isAlaCarte ? null : (Number(entry.member_count) || null),
-    price_per_member: isAlaCarte ? null : (sumPrices || null),
+    price_per_member: isAlaCarte ? null : (isOther ? (Number(entry.price_per_member) || null) : (sumPrices || null)),
     balance_account_partner_id:
       dbPaymentStatus !== 'paid_full' && entry.balance_account_partner_id
         ? Number(entry.balance_account_partner_id) || entry.balance_account_partner_id
@@ -310,6 +313,7 @@ export async function updateIncomeEntry(
     entry.income_type === 'alacarte' ||
     entry.income_type === 'À La Carte' ||
     String(entry.income_type).toLowerCase() === 'alacarte';
+  const isOther = entry.meal_plan === 'other';
 
   if (entry.income_type !== undefined || entry.meal_plan !== undefined) {
     updatePayload.income_type = isAlaCarte ? 'alacarte' : 'meal';
@@ -325,6 +329,21 @@ export async function updateIncomeEntry(
     updatePayload.dinner_price = null;
     updatePayload.member_count = null;
     updatePayload.price_per_member = null;
+  } else if (isOther) {
+    updatePayload.meal_type = null;
+    updatePayload.meal_combination = null;
+    updatePayload.breakfast_price = null;
+    updatePayload.lunch_price = null;
+    updatePayload.dinner_price = null;
+    if (entry.by_who !== undefined) {
+      updatePayload.by_who = entry.by_who || 'IRSHAD';
+    }
+    if (entry.member_count !== undefined) {
+      updatePayload.member_count = entry.member_count ? Number(entry.member_count) : null;
+    }
+    if (entry.price_per_member !== undefined) {
+      updatePayload.price_per_member = entry.price_per_member ? Number(entry.price_per_member) : null;
+    }
   } else {
     if (entry.meal_combination !== undefined) {
       updatePayload.meal_combination = entry.meal_combination;

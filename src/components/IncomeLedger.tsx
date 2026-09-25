@@ -92,6 +92,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   const [editBreakfastPrice, setEditBreakfastPrice] = useState<string>('');
   const [editLunchPrice, setEditLunchPrice] = useState<string>('');
   const [editDinnerPrice, setEditDinnerPrice] = useState<string>('');
+  const [editOtherPrice, setEditOtherPrice] = useState<string>('');
   const [editTotal, setEditTotal] = useState<string>('');
   const [hasManuallyEditedTotal, setHasManuallyEditedTotal] = useState(false);
   const [editPaymentStatus, setEditPaymentStatus] = useState<PaymentStatus>('Paid Full');
@@ -257,6 +258,19 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
       };
     }
 
+    if (record.mealPlan === 'other') {
+      const partnerStr = record.byWho ? `- ${record.byWho}` : '';
+      const paxStr = record.membersCount > 0 ? `(${record.membersCount} PAX)` : '';
+      const title = ['OTHER', paxStr, partnerStr].filter(Boolean).join(' ');
+      const priceLine = record.pricePerMember ? `₹${record.pricePerMember} / person` : (record.travels || `Total: ${formatCurrency(record.total)}`);
+      return {
+        title,
+        priceLine,
+        travels: record.travels,
+        isAlaCarte: false,
+      };
+    }
+
     const bP = record.breakfastPrice ? `₹${record.breakfastPrice}` : '';
     const lP = record.lunchPrice ? `₹${record.lunchPrice}` : '';
     const dP = record.dinnerPrice ? `₹${record.dinnerPrice}` : '';
@@ -311,6 +325,10 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   const computedMealTotal = useMemo(() => {
     if (editPlan === 'alacarte') return 0;
     const m = parseInt(editMembers, 10) || 0;
+    if (editPlan === 'other') {
+      const oP = parseFloat(editOtherPrice) || 0;
+      return m * oP;
+    }
     const bP = parseFloat(editBreakfastPrice) || 0;
     const lP = parseFloat(editLunchPrice) || 0;
     const dP = parseFloat(editDinnerPrice) || 0;
@@ -332,6 +350,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   }, [
     editPlan,
     editMembers,
+    editOtherPrice,
     editBreakfastPrice,
     editLunchPrice,
     editDinnerPrice,
@@ -363,9 +382,23 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
       setEditBreakfastPrice('');
       setEditLunchPrice('');
       setEditDinnerPrice('');
+      setEditOtherPrice('');
       setEditTotal(String(record.total));
       setHasManuallyEditedTotal(false);
+    } else if (record.mealPlan === 'other') {
+      setEditPlan('other');
+      setEditByWho(record.byWho || 'IRSHAD');
+      setEditMembers(record.membersCount ? String(record.membersCount) : '');
+      const oP = record.pricePerMember ? String(record.pricePerMember) : '';
+      setEditOtherPrice(oP);
+      setEditBreakfastPrice('');
+      setEditLunchPrice('');
+      setEditDinnerPrice('');
+      setEditTotal(String(record.total));
+      const initialCalculated = (record.membersCount || 0) * (parseFloat(oP) || 0);
+      setHasManuallyEditedTotal(record.total !== initialCalculated);
     } else {
+      setEditOtherPrice('');
       const plan = record.mealPlan || '1_time';
       setEditPlan(plan);
       setEditByWho(record.byWho || 'IRSHAD');
@@ -441,6 +474,21 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
         if (totalAmount <= 0) {
           throw new Error('Total Amount must be greater than 0.');
         }
+      } else if (editPlan === 'other') {
+        memberCount = parseInt(editMembers, 10) || 0;
+        if (memberCount <= 0) {
+          throw new Error('Members count must be greater than 0.');
+        }
+        const oP = parseFloat(editOtherPrice) || 0;
+        if (oP <= 0) {
+          throw new Error('Price / Rate must be greater than 0.');
+        }
+        calculatedPricePerMember = oP;
+        const manualTotal = parseFloat(editTotal);
+        if (isNaN(manualTotal) || manualTotal <= 0) {
+          throw new Error('Total Amount must be greater than 0.');
+        }
+        totalAmount = manualTotal;
       } else {
         memberCount = parseInt(editMembers, 10) || 0;
         if (memberCount <= 0) {
@@ -512,10 +560,10 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
         date: editDate,
         incomeType: isAlaCarte ? 'À La Carte' : 'Meal',
         mealPlan: editPlan,
-        mealCombination: isAlaCarte ? null : mealCombo,
-        breakfastPrice: isAlaCarte ? null : bPrice,
-        lunchPrice: isAlaCarte ? null : lPrice,
-        dinnerPrice: isAlaCarte ? null : dPrice,
+        mealCombination: isAlaCarte || editPlan === 'other' ? null : mealCombo,
+        breakfastPrice: isAlaCarte || editPlan === 'other' ? null : bPrice,
+        lunchPrice: isAlaCarte || editPlan === 'other' ? null : lPrice,
+        dinnerPrice: isAlaCarte || editPlan === 'other' ? null : dPrice,
         byWho: isAlaCarte ? 'À LA CARTE' : editByWho.trim().toUpperCase(),
         travels: editTravels.trim().toUpperCase() || undefined,
         membersCount: isAlaCarte ? 0 : (memberCount || 0),
@@ -893,13 +941,14 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
               {/* Plan Switcher */}
               <div>
                 <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Plan</label>
-                <div className="grid grid-cols-4 gap-1 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]">
+                <div className="grid grid-cols-5 gap-1 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]">
                   {(
                     [
                       { id: '1_time', label: '1 TIME' },
                       { id: '2_time', label: '2 TIME' },
                       { id: '3_time', label: '3 TIME' },
                       { id: 'alacarte', label: 'À LA CARTE' },
+                      { id: 'other', label: 'OTHER' },
                     ] as { id: MealPlan; label: string }[]
                   ).map((p) => (
                     <button
@@ -1011,6 +1060,21 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
                       required
                     />
                   </div>
+
+                  {/* OTHER Price / Rate input */}
+                  {editPlan === 'other' && (
+                    <div>
+                      <label className="block text-[11px] text-[#D4AF37] mb-1 font-semibold">Price / Rate (₹)</label>
+                      <input
+                        type="number"
+                        value={editOtherPrice}
+                        onChange={(e) => setEditOtherPrice(e.target.value)}
+                        placeholder="100"
+                        className="w-full px-2.5 py-1.5 bg-[#111111] border border-[#2A2A2A] rounded text-xs text-[#F5F5F5] focus:outline-none focus:border-[#D4AF37]"
+                        required
+                      />
+                    </div>
+                  )}
 
                   {/* Dynamic Price inputs */}
                   {editPlan === '1_time' && (

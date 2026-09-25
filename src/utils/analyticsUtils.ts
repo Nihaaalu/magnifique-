@@ -346,10 +346,11 @@ export function calculateMealCounts(
   let dinner = 0;
 
   for (const record of records) {
-    // À La Carte records do not count towards meals
+    // À La Carte and Other records do not count towards meals
     if (
       record.incomeType === 'À La Carte' ||
       record.mealPlan === 'alacarte' ||
+      record.mealPlan === 'other' ||
       record.byWho === 'À LA CARTE'
     ) {
       continue;

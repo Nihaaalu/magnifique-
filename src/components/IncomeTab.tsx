@@ -62,6 +62,9 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const [lunchPrice, setLunchPrice] = useState<string>('');
   const [dinnerPrice, setDinnerPrice] = useState<string>('');
 
+  // OTHER income input
+  const [otherPrice, setOtherPrice] = useState<string>('');
+
   // Editable Total Amount state (Meal bookings and À La Carte)
   const [totalAmountInput, setTotalAmountInput] = useState<string>('');
   const [isTotalManuallyEdited, setIsTotalManuallyEdited] = useState<boolean>(false);
@@ -110,6 +113,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const byWhoOptions = [...partnerNamesUpper, 'Other'];
 
   const isAlaCarte = selectedPlan === 'alacarte';
+  const isOther = selectedPlan === 'other';
 
   const handlePlanChange = (plan: MealPlan) => {
     setSelectedPlan(plan);
@@ -128,12 +132,15 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const bPriceNum = Math.max(0, parseFloat(breakfastPrice) || 0);
   const lPriceNum = Math.max(0, parseFloat(lunchPrice) || 0);
   const dPriceNum = Math.max(0, parseFloat(dinnerPrice) || 0);
+  const otherPriceNum = Math.max(0, parseFloat(otherPrice) || 0);
   const manualTotalNum = Math.max(0, parseFloat(manualTotalAmount) || 0);
 
   // Calculate live suggested total based on plan & combination
   let suggestedTotal = 0;
   if (isAlaCarte) {
     suggestedTotal = manualTotalNum;
+  } else if (isOther) {
+    suggestedTotal = countNum * otherPriceNum;
   } else if (selectedPlan === '1_time') {
     if (oneTimeMeal === 'breakfast') {
       suggestedTotal = countNum * bPriceNum;
@@ -196,6 +203,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     setBreakfastPrice('');
     setLunchPrice('');
     setDinnerPrice('');
+    setOtherPrice('');
     setManualTotalAmount('');
     setTotalAmountInput('');
     setIsTotalManuallyEdited(false);
@@ -207,6 +215,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
 
   const getPlanBadgeLabel = () => {
     if (isAlaCarte) return 'À LA CARTE';
+    if (isOther) return 'OTHER';
     if (selectedPlan === '1_time') {
       return `1 TIME • ${oneTimeMeal.toUpperCase()}`;
     }
@@ -221,6 +230,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const getSaveButtonLabel = () => {
     if (isSubmitting) return 'SAVING TO SUPABASE...';
     if (isAlaCarte) return 'SAVE À LA CARTE';
+    if (isOther) return 'SAVE OTHER';
     if (selectedPlan === '1_time') {
       return `SAVE 1 TIME (${oneTimeMeal.toUpperCase()})`;
     }
@@ -240,6 +250,26 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
       const enteredTotal = parseFloat(manualTotalAmount);
       if (isNaN(enteredTotal) || enteredTotal <= 0) {
         setValidationError('Please enter a valid Total Amount greater than ₹0.');
+        return;
+      }
+    } else if (isOther) {
+      if (byWhoOption === 'Other' && !customByWho.trim()) {
+        setValidationError('Please enter a name for By Who.');
+        return;
+      }
+
+      if (countNum <= 0) {
+        setValidationError('Members count must be greater than 0.');
+        return;
+      }
+
+      if (otherPriceNum <= 0) {
+        setValidationError('Please enter a valid Price / Rate.');
+        return;
+      }
+
+      if (authoritativeTotal <= 0) {
+        setValidationError('Total Amount must be greater than ₹0.');
         return;
       }
     } else {
@@ -320,7 +350,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
     let lPriceToStore: number | null = null;
     let dPriceToStore: number | null = null;
 
-    if (!isAlaCarte) {
+    if (!isAlaCarte && !isOther) {
       if (selectedPlan === '1_time') {
         mealComboToStore = oneTimeMeal;
         if (oneTimeMeal === 'breakfast') bPriceToStore = bPriceNum;
@@ -354,12 +384,13 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
         entry_date: entryDate || getTodayDateString(),
         income_type: isAlaCarte ? 'alacarte' : 'meal',
         meal_plan: selectedPlan,
-        meal_combination: mealComboToStore,
-        breakfast_price: bPriceToStore,
-        lunch_price: lPriceToStore,
-        dinner_price: dPriceToStore,
+        meal_combination: isOther ? null : mealComboToStore,
+        breakfast_price: isOther ? null : bPriceToStore,
+        lunch_price: isOther ? null : lPriceToStore,
+        dinner_price: isOther ? null : dPriceToStore,
         travel_name: travels.trim().toUpperCase() || null,
         member_count: isAlaCarte ? null : countNum,
+        price_per_member: isAlaCarte ? null : (isOther ? otherPriceNum : null),
         total_amount: authoritativeTotal,
         amount_received: finalPaid,
         payment_status: dbPaymentStatus,
@@ -417,14 +448,15 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
           </span>
         </div>
 
-        {/* PRIMARY INCOME TYPE CHOICES: 1 TIME | 2 TIME | 3 TIME | À LA CARTE */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]" id="meal-plan-primary-selector">
+        {/* PRIMARY INCOME TYPE CHOICES: 1 TIME | 2 TIME | 3 TIME | À LA CARTE | OTHER */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 p-1 bg-[#111111] rounded-lg border border-[#2A2A2A]" id="meal-plan-primary-selector">
           {(
             [
               { id: '1_time', label: '1 TIME' },
               { id: '2_time', label: '2 TIME' },
               { id: '3_time', label: '3 TIME' },
               { id: 'alacarte', label: 'À LA CARTE' },
+              { id: 'other', label: 'OTHER' },
             ] as { id: MealPlan; label: string }[]
           ).map((plan) => {
             const isSelected = selectedPlan === plan.id;
@@ -601,6 +633,155 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                     value={manualTotalAmount}
                     onChange={(e) => setManualTotalAmount(e.target.value)}
                     className="w-full px-3 py-2.5 bg-[#111111] border border-[#D4AF37]/50 rounded-md text-sm font-bold text-[#F2C94C] placeholder-[#777777] min-h-[42px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    required
+                  />
+                </div>
+              </div>
+            ) : isOther ? (
+              /* ==================================================
+                 OTHER FORM (DATE, BY WHO, TRAVELLER, MEMBERS, PRICE, TOTAL)
+                 ================================================== */
+              <div className="space-y-3.5" id="other-form-fields">
+                {/* Date & By Who */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                      Date
+                    </label>
+                    <input
+                      type="date"
+                      id="income-other-date-input"
+                      value={entryDate}
+                      onChange={(e) => setEntryDate(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                      By Who
+                    </label>
+                    <select
+                      id="income-other-by-who-select"
+                      value={byWhoOption}
+                      onChange={(e) => handleByWhoChange(e.target.value)}
+                      className="w-full px-2 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    >
+                      {byWhoOptions.map((opt) => (
+                        <option key={opt} value={opt} className="bg-[#171717] text-[#F5F5F5]">
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Custom By Who (if Other) */}
+                {byWhoOption === 'Other' && (
+                  <div>
+                    <input
+                      type="text"
+                      id="income-other-custom-by-who"
+                      placeholder="Enter person name"
+                      value={customByWho}
+                      onChange={(e) => setCustomByWho(e.target.value.toUpperCase())}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] uppercase"
+                      style={{ textTransform: 'uppercase' }}
+                      required
+                    />
+                  </div>
+                )}
+
+                {/* Traveller (Optional) */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                    Traveller <span className="text-[#777777] font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="income-other-travels-input"
+                    placeholder="e.g. Tea / Snacks / Group"
+                    value={travels}
+                    onChange={(e) => setTravels(e.target.value.toUpperCase())}
+                    className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors uppercase"
+                    style={{ textTransform: 'uppercase' }}
+                  />
+                </div>
+
+                {/* Members Count & Price / Rate */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                      Members Count (PAX)
+                    </label>
+                    <input
+                      type="number"
+                      id="income-other-members-count"
+                      min="1"
+                      step="1"
+                      placeholder="e.g. 30"
+                      value={membersCount}
+                      onChange={(e) => setMembersCount(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[#D4AF37] mb-1">
+                      Price / Rate (₹)
+                    </label>
+                    <input
+                      type="number"
+                      id="income-other-price"
+                      min="0"
+                      step="any"
+                      placeholder="e.g. 100"
+                      value={otherPrice}
+                      onChange={(e) => setOtherPrice(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs font-semibold text-[#F5F5F5] placeholder-[#777777] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* Authoritative Total Amount Section (Editable with live calculated reference) */}
+                <div className="p-3 bg-[#111111] border border-[#D4AF37]/50 rounded-lg space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-black text-[#F2C94C] tracking-wide">
+                        TOTAL AMOUNT (₹)
+                      </label>
+                      <span className="text-[10px] text-[#888888]">
+                        Suggested: {countNum} PAX × ₹{otherPriceNum.toFixed(0)} = {formatCurrency(suggestedTotal)}
+                      </span>
+                    </div>
+                    {isTotalManuallyEdited && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsTotalManuallyEdited(false);
+                          setTotalAmountInput(suggestedTotal > 0 ? String(suggestedTotal) : '');
+                        }}
+                        className="text-[10px] text-[#D4AF37] hover:text-[#F2C94C] underline cursor-pointer font-bold"
+                      >
+                        Reset to calculated ({formatCurrency(suggestedTotal)})
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    id="income-other-total-amount-input"
+                    min="0"
+                    step="any"
+                    placeholder="Enter total amount"
+                    value={totalAmountInput}
+                    onChange={(e) => {
+                      setTotalAmountInput(e.target.value);
+                      setIsTotalManuallyEdited(true);
+                    }}
+                    className="w-full px-3 py-2 bg-[#171717] border border-[#D4AF37] rounded-md text-sm font-black text-[#F2C94C] placeholder-[#777777] min-h-[42px] focus:outline-none focus:ring-1 focus:ring-[#D4AF37]"
                     required
                   />
                 </div>

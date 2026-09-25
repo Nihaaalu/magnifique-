@@ -1,8 +1,8 @@
 export type TabType = 'income' | 'expense' | 'partner' | 'analytics';
 
 export type MealType = 'Breakfast' | 'Lunch' | 'Dinner';
-export type IncomeType = 'Meal' | 'À La Carte';
-export type MealPlan = '1_time' | '2_time' | '3_time' | 'alacarte';
+export type IncomeType = 'Meal' | 'À La Carte' | 'Other';
+export type MealPlan = '1_time' | '2_time' | '3_time' | 'alacarte' | 'other';
 export type MealCombination =
   | 'breakfast'
   | 'lunch'

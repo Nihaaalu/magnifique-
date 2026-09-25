@@ -246,6 +246,11 @@ const formatMealColumn = (inc: IncomeRecord): string => {
     return 'ALACARTE';
   }
 
+  if (inc.mealPlan === 'other') {
+    const count = inc.membersCount || 0;
+    return count > 0 ? `OTHER (${count})` : 'OTHER';
+  }
+
   let code = 'B';
   if (inc.mealPlan === '3_time' || inc.mealCombination === 'all') {
     code = 'B/L/D';
