@@ -793,10 +793,15 @@ export async function generateAnalyticsPDF(options: AnalyticsPdfOptions): Promis
   doc.addPage();
 
   // Top Header on Page 2
+  const p2HeaderBarHeight = 18;
+  const p2GoldStripeY = 17.2;
+  const p2GoldStripeHeight = 1.0;
+  const p2HeaderBottom = p2GoldStripeY + p2GoldStripeHeight; // 18.2 mm
+
   doc.setFillColor(15, 15, 15);
-  doc.rect(0, 0, pageWidth, 18, 'F');
+  doc.rect(0, 0, pageWidth, p2HeaderBarHeight, 'F');
   doc.setFillColor(212, 175, 55);
-  doc.rect(0, 17.2, pageWidth, 1.0, 'F');
+  doc.rect(0, p2GoldStripeY, pageWidth, p2GoldStripeHeight, 'F');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
@@ -812,7 +817,9 @@ export async function generateAnalyticsPDF(options: AnalyticsPdfOptions): Promis
   doc.setTextColor(170, 170, 170);
   doc.text(`Period: ${dateRangeLabel}`, pageWidth - margin, 10, { align: 'right' });
 
-  curY = 22.5;
+  // Safe content offset after header
+  const p2TopContentPadding = 8.0;
+  curY = p2HeaderBottom + p2TopContentPadding;
 
   // Section Header: B. EXPENSE DISTRIBUTION
   doc.setFillColor(244, 63, 94);
@@ -833,7 +840,7 @@ export async function generateAnalyticsPDF(options: AnalyticsPdfOptions): Promis
     { align: 'right' }
   );
 
-  curY += 5;
+  curY += 6.0;
 
   // 1:1 SQUARE Large Donut Canvas for Expenses (using the EXACT SAME final grouped items!)
   const expenseDonutImg = renderSquareDonutCanvas({
@@ -877,9 +884,12 @@ export async function generateAnalyticsPDF(options: AnalyticsPdfOptions): Promis
 
   const numItems = finalExpenseItems.length;
   const maxRowsExpense = Math.max(Math.ceil(numItems / 2), 1);
-  const rowHExpense = 9.0;
+  const maxAvailableLegendH = expenseCardH - 8.0; // 60 mm safe inner zone
+  const rowHExpense = Math.min(8.5, maxAvailableLegendH / maxRowsExpense);
   const totalLegendH = maxRowsExpense * rowHExpense;
   const legendTopY = curY + (expenseCardH - totalLegendH) / 2;
+  const legendFontSize = rowHExpense < 7.2 ? 6.6 : 7.2;
+  const bulletRadius = rowHExpense < 7.2 ? 0.9 : 1.05;
 
   // Subtle thin vertical divider between the two expense legend columns
   if (numItems > maxRowsExpense) {
@@ -906,11 +916,11 @@ export async function generateAnalyticsPDF(options: AnalyticsPdfOptions): Promis
     // Sub-column 1: Bullet Dot + Name
     const [r, g, b] = hexToRgb(item.color);
     doc.setFillColor(r, g, b);
-    doc.circle(nameX + 1.2, rowCenterY, 1.05, 'F');
+    doc.circle(nameX + 1.2, rowCenterY, bulletRadius, 'F');
 
     // Name (Left-aligned at nameX + 3.8, measured with PDF font)
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.2);
+    doc.setFontSize(legendFontSize);
     doc.setTextColor(
       item.name === 'OTHER EXPENSES' ? 71 : 15,
       item.name === 'OTHER EXPENSES' ? 85 : 23,
@@ -930,19 +940,19 @@ export async function generateAnalyticsPDF(options: AnalyticsPdfOptions): Promis
     // Sub-column 2: Amount (Right-aligned at amountX + amountColWidth)
     const amtStr = formatIndianNumber(item.amount);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.2);
+    doc.setFontSize(legendFontSize);
     doc.setTextColor(51, 65, 85);
     doc.text(amtStr, amountX + amountColWidth, textBaselineY, { align: 'right' });
 
     // Sub-column 3: Percentage (Right-aligned at percentageX + percentColWidth)
     const pctStr = `${item.percentage.toFixed(1)}%`;
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.2);
+    doc.setFontSize(legendFontSize);
     doc.setTextColor(r, g, b);
     doc.text(pctStr, percentageX + percentColWidth, textBaselineY, { align: 'right' });
   });
 
-  curY += expenseCardH + 3.5;
+  curY += expenseCardH + 4.0;
 
   // Final Grouped Expense Table (Contains ONLY groups >= ₹10,000 + ONE OTHER EXPENSES row!)
   const expenseTableRows = finalExpenseItems.map((item, index) => [
@@ -954,7 +964,7 @@ export async function generateAnalyticsPDF(options: AnalyticsPdfOptions): Promis
 
   autoTable(doc, {
     startY: curY,
-    margin: { left: margin, right: margin, bottom: 12 },
+    margin: { left: margin, right: margin, bottom: 14 },
     head: [['#', 'Expense Item (Grouped Description)', 'Total Amount (INR)', 'Share (%)']],
     body: expenseTableRows,
     foot: [['', 'Total Expenses', formatIndianCurrency(expenseResult.totalExpense, 'text'), '100.0%']],

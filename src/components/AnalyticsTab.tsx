@@ -48,6 +48,7 @@ import {
   calculateMealCounts,
 } from '../utils/analyticsUtils';
 import { generateAnalyticsPDF } from '../services/analyticsPdfGenerator';
+import { generatePartnerAnalyticsPDF } from '../services/partnerAnalyticsPdfGenerator';
 
 interface AnalyticsTabProps {
   incomeRecords: IncomeRecord[];
@@ -298,6 +299,44 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
     } catch (err: any) {
       console.error('Failed to generate restaurant analytics PDF:', err);
       setDownloadError(err.message || 'Failed to generate Restaurant Analytics PDF. Please try again.');
+    } finally {
+      setGeneratingType(null);
+    }
+  };
+
+  // 4. Download Partner Analytics PDF (e.g. IRSHAD) for currently selected month
+  const handleDownloadPartnerAnalyticsPdf = async (partnerName: string) => {
+    const targetMonth = selectedMonth || selectedReportMonth;
+    if (generatingType || !targetMonth) return;
+    setGeneratingType(`partner-${partnerName}`);
+    setDownloadError(null);
+    setDownloadMsg(null);
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const [year, month] = targetMonth.split('-');
+      const daysInMonth = new Date(parseInt(year, 10), parseInt(month, 10), 0).getDate();
+      const startDate = `${targetMonth}-01`;
+      const endDate = `${targetMonth}-${daysInMonth.toString().padStart(2, '0')}`;
+      const periodLabel = `${formatPdfMonth(targetMonth)} (${startDate} to ${endDate})`;
+
+      await generatePartnerAnalyticsPDF({
+        partnerName,
+        dateRangeLabel: periodLabel,
+        startDate,
+        endDate,
+        incomeRecords,
+        expenseRecords,
+        partners,
+      });
+
+      const fileName = `Magnifique_${partnerName}_Analytics_Report_${targetMonth}.pdf`;
+      setDownloadMsg(`${partnerName} Analytics PDF downloaded successfully: ${fileName}`);
+      setTimeout(() => setDownloadMsg(null), 4000);
+    } catch (err: any) {
+      console.error(`Failed to generate ${partnerName} analytics PDF:`, err);
+      setDownloadError(err.message || `Failed to generate ${partnerName} Analytics PDF. Please try again.`);
     } finally {
       setGeneratingType(null);
     }
@@ -798,6 +837,63 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 <span>Re-open Month</span>
               </button>
             )}
+          </div>
+        </div>
+      </section>
+
+      {/* ==================================================
+          SECTION: PARTNER ANALYTICS
+          ================================================== */}
+      <section id="section-partner-analytics" className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-[#D4AF37]" />
+            <h2 className="text-xs font-bold text-[#F5F5F5] tracking-wider uppercase">
+              PARTNER ANALYTICS
+            </h2>
+          </div>
+          <span className="text-[11px] font-bold text-[#D4AF37] bg-[#171717] px-2.5 py-0.5 rounded border border-[#2A2A2A]">
+            Individual Partner Audit
+          </span>
+        </div>
+
+        <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md space-y-3.5">
+          <div className="p-3.5 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs sm:text-sm font-black text-[#F5F5F5] tracking-wide block">
+                  IRSHAD
+                </span>
+                <span className="text-[11px] text-[#777777]">
+                  Income, Expense & Settlement Audit for {formatPdfMonth(selectedMonth)}
+                </span>
+              </div>
+              <span className="text-[10px] font-bold text-[#4ade80] bg-[#122014] border border-[#1d3d24] px-2 py-0.5 rounded">
+                Active Partner
+              </span>
+            </div>
+
+            <button
+              type="button"
+              id="btn-download-irshad-analytics-pdf"
+              onClick={() => handleDownloadPartnerAnalyticsPdf('IRSHAD')}
+              disabled={generatingType !== null || availableMonths.length === 0 || !selectedMonth}
+              className={`w-full flex items-center justify-center gap-2 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] px-4.5 py-2.5 rounded-lg font-black text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer min-h-[42px] ${
+                generatingType === 'partner-IRSHAD' ? 'opacity-80' : ''
+              } ${availableMonths.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
+            >
+              {generatingType === 'partner-IRSHAD' ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-[#0A0A0A]" />
+                  <span>Generating IRSHAD Analytics PDF...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 text-[#0A0A0A]" />
+                  <span>DOWNLOAD IRSHAD ANALYTICS PDF</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
       </section>
