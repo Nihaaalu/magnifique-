@@ -865,7 +865,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                   IRSHAD
                 </span>
                 <span className="text-[11px] text-[#777777]">
-                  Income, Expense & Settlement Audit for {formatPdfMonth(selectedMonth)}
+                  Expense Audit & Breakdown for {formatPdfMonth(selectedMonth)}
                 </span>
               </div>
               <span className="text-[10px] font-bold text-[#4ade80] bg-[#122014] border border-[#1d3d24] px-2 py-0.5 rounded">
