@@ -49,13 +49,54 @@ export interface PartnerAnalyticsPdfOptions {
 }
 
 // ============================================================================
-// GROUPING ENGINE (CASE-INSENSITIVE DESCRIPTION AGGREGATION)
+// GROUPING ENGINE (CASE-INSENSITIVE DESCRIPTION AGGREGATION & STRICT NORMALIZATION)
 // ============================================================================
+
+/**
+ * Normalizes an expense description according to the 3 specific partner grouping rules:
+ * 1. VEGETABLES GROUP:
+ *    Groups "VEGETABLES", "VEGETABLE", "VEGETABLE (1)", "VEGETABLE(1)", "VEGETABLE (2)", etc.
+ *    into "VEGETABLES".
+ * 2. CAKE GROUP:
+ *    Groups cake-related descriptions ("CAKE", "CAKES", "WELCOME CAKE", "TEACHERS DAY CAKE",
+ *    "BIRTHDAY CAKE", "BAASHA CAKE", "EXPRESS 2 CAKE", etc.) into "CAKE".
+ * 3. DJ GROUP:
+ *    Groups descriptions with "DJ" as a separate word ("DJ", "GET OUT DJ", "ART DJ",
+ *    "BAASHA DJ", "DOODS DJ", "EXPRESS DJ", etc.) into "DJ".
+ *    Does NOT group words like "DJANGO".
+ * 4. ALL OTHER DESCRIPTIONS:
+ *    Remain exactly as their own distinct normalized description (case-insensitive, trimmed).
+ */
+export function normalizePartnerExpenseDescription(rawDesc: string): string {
+  const cleaned = rawDesc.trim().toUpperCase().replace(/\s+/g, ' ');
+
+  // 1. VEGETABLES GROUP:
+  // Matches "VEGETABLE", "VEGETABLES", "VEGETABLE (1)", "VEGETABLE(1)", "VEGETABLE (2)", etc.
+  if (/^VEGETABLES?(\s*\(\s*\d+\s*\))?$/i.test(cleaned)) {
+    return 'VEGETABLES';
+  }
+
+  // 2. CAKE GROUP:
+  // Word-aware matching for "CAKE" or "CAKES"
+  if (/\bCAKES?\b/i.test(cleaned)) {
+    return 'CAKE';
+  }
+
+  // 3. DJ GROUP:
+  // Word-aware matching for "DJ" as a standalone word (avoids "DJANGO", "ADJUST", etc.)
+  if (/\bDJ\b/i.test(cleaned)) {
+    return 'DJ';
+  }
+
+  // 4. All other descriptions remain distinct
+  return cleaned;
+}
 
 /**
  * Groups all partner expenses by their normalized description/particulars.
  * - Trims whitespace
- * - Case-insensitive grouping ("CHICKEN", "chicken", "Chicken" -> "CHICKEN")
+ * - Applies the 3 specific normalization rules: VEGETABLES, CAKE, DJ
+ * - Case-insensitive grouping for all other items
  * - Does NOT merge distinct items ("CHICKEN GRAVY" vs "CHICKEN" remain separate)
  * - Verifies sum(grouped) === sum(transactions)
  * - Sorts descending by total amount
@@ -70,8 +111,8 @@ export function groupPartnerExpenses(
 
   for (const exp of expenses) {
     const rawDesc = (exp.description || exp.name || exp.category || 'EXPENSE').trim();
-    // Normalize key: uppercase with normalized single spaces
-    const normKey = rawDesc.toUpperCase().replace(/\s+/g, ' ');
+    // Normalize key using strict partner normalization rules
+    const normKey = normalizePartnerExpenseDescription(rawDesc);
 
     const existing = map.get(normKey);
     const amount = Number(exp.amount) || 0;
