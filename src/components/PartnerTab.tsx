@@ -5,6 +5,8 @@ import {
   PartnerSettlementRow,
   PartnerSettlement,
   SettlementType,
+  IncomeRecord,
+  ExpenseRecord,
 } from '../types';
 import {
   formatCurrency,
@@ -19,11 +21,14 @@ import {
   AlertTriangle,
   Clock,
 } from 'lucide-react';
+import { IrshadDetailsPage } from './IrshadDetailsPage';
 
 interface PartnerTabProps {
   partners: Partner[];
   partnerBalances: PartnerCurrentBalance[];
   partnerSettlements: (PartnerSettlement | PartnerSettlementRow)[];
+  incomeRecords?: IncomeRecord[];
+  expenseRecords?: ExpenseRecord[];
   onAddSettlement: (
     settlement: Omit<PartnerSettlementRow, 'id' | 'created_at'>
   ) => Promise<void>;
@@ -56,15 +61,21 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
   partners,
   partnerBalances,
   partnerSettlements,
+  incomeRecords = [],
+  expenseRecords = [],
   onAddSettlement,
   onUpdateSettlement,
   onDeleteSettlement,
   isLoading,
 }) => {
   const [activeModal, setActiveModal] = useState<SettlementModalState | null>(null);
+  const [showIrshadDetails, setShowIrshadDetails] = useState<boolean>(false);
 
   const [settlementAmount, setSettlementAmount] = useState<string>('');
   const [settlementDate, setSettlementDate] = useState<string>(getTodayDateString());
+  const [settlementMonth, setSettlementMonth] = useState<string>(() =>
+    getTodayDateString().substring(0, 7)
+  );
   const [settlementType, setSettlementType] = useState<SettlementType>('balance_to_hotel');
   const [settlementNotes, setSettlementNotes] = useState<string>('');
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
@@ -137,7 +148,9 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
     });
     setSettlementType(type);
     setSettlementAmount(currentBalance > 0 ? currentBalance.toString() : '');
-    setSettlementDate(getTodayDateString());
+    const today = getTodayDateString();
+    setSettlementDate(today);
+    setSettlementMonth(today.substring(0, 7));
     setSettlementNotes('');
     setValidationError(null);
   };
@@ -166,9 +179,12 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
     });
     setSettlementType(sType);
     setSettlementAmount(String(settlement.amount));
-    setSettlementDate(
-      settlement.date || settlement.settlement_date || getTodayDateString()
-    );
+    const sDate = settlement.date || settlement.settlement_date || getTodayDateString();
+    setSettlementDate(sDate);
+    const sMonth = settlement.settlementMonth
+      ? settlement.settlementMonth.substring(0, 7)
+      : sDate.substring(0, 7);
+    setSettlementMonth(sMonth);
     setSettlementNotes(settlement.notes || '');
     setValidationError(null);
   };
@@ -252,6 +268,10 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
 
     setIsSubmitting(true);
     try {
+      const monthPayload = settlementMonth
+        ? `${settlementMonth}-01`
+        : `${(settlementDate || getTodayDateString()).substring(0, 7)}-01`;
+
       if (activeModal.mode === 'create') {
         await onAddSettlement({
           partner_id: activeModal.partnerId,
@@ -259,6 +279,7 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
           amount: parsedAmount,
           settlement_type: settlementType,
           notes: settlementNotes.trim().toUpperCase() || null,
+          settlement_month: monthPayload,
         });
 
         const typeLabel =
@@ -274,6 +295,7 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
           amount: parsedAmount,
           settlement_type: settlementType,
           notes: settlementNotes.trim().toUpperCase() || null,
+          settlement_month: monthPayload,
         });
 
         const typeLabel =
@@ -296,6 +318,20 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
       setIsSubmitting(false);
     }
   };
+
+  if (showIrshadDetails) {
+    return (
+      <IrshadDetailsPage
+        incomeRecords={incomeRecords}
+        expenseRecords={expenseRecords}
+        partnerSettlements={partnerSettlements as PartnerSettlement[]}
+        partners={partners}
+        onBack={() => setShowIrshadDetails(false)}
+        onAddSettlement={onAddSettlement}
+        onDeleteSettlement={onDeleteSettlement}
+      />
+    );
+  }
 
   return (
     <div id="partner-tab-container" className="space-y-4">
@@ -453,6 +489,20 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
                       Settlement
                     </button>
                   </div>
+
+                  {/* DETAILS Button (Exclusive to IRSHAD card) */}
+                  {partner.name.trim().toUpperCase() === 'IRSHAD' && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        id="btn-irshad-details"
+                        onClick={() => setShowIrshadDetails(true)}
+                        className="w-full py-2.5 px-4 bg-[#111111] hover:bg-[#1D1D1D] border border-[#D4AF37] hover:border-[#F2C94C] text-[#D4AF37] hover:text-[#F2C94C] rounded-lg font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs min-h-[40px]"
+                      >
+                        <span>DETAILS</span>
+                      </button>
+                    </div>
+                  )}
 
                   {/* 3. Settlement History Section inside each partner card */}
                   <div className="pt-2 border-t border-[#242424] space-y-2">
@@ -656,7 +706,28 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
                   type="date"
                   id="settlement-date-input"
                   value={settlementDate}
-                  onChange={(e) => setSettlementDate(e.target.value)}
+                  onChange={(e) => {
+                    const newDate = e.target.value;
+                    setSettlementDate(newDate);
+                    if (newDate && newDate.length >= 7 && activeModal?.mode === 'create') {
+                      setSettlementMonth(newDate.substring(0, 7));
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                  required
+                />
+              </div>
+
+              {/* Accounting Month */}
+              <div>
+                <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
+                  Accounting Month <span className="text-[#888888] font-normal">(Settles this month's balance)</span>
+                </label>
+                <input
+                  type="month"
+                  id="settlement-accounting-month-input"
+                  value={settlementMonth}
+                  onChange={(e) => setSettlementMonth(e.target.value)}
                   className="w-full px-3 py-2 bg-[#111111] border border-[#2A2A2A] rounded-md text-xs text-[#F5F5F5] min-h-[40px] focus:outline-none focus:border-[#D4AF37] transition-colors"
                   required
                 />

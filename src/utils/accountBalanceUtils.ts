@@ -179,18 +179,11 @@ export function calculateAllMonthsSummary(
     }, 0);
 
     // Opening balance rule:
-    // - For the first month (i === 0): Opening Balance = 0.
-    // - For subsequent months: Opening Balance = previous month's closing balance ONLY IF previous month was officially closed.
-    // - If previous month was NOT closed: Opening Balance = 0 (do not carry forward unclosed temporary/test balances).
+    // Normal accounting cash balance starts from Rs. 0 unless explicitly configured in account_months.
+    // Previous month's cash closing balance is NOT carried forward into the next month.
     let opening = 0;
-    if (i > 0) {
-      const prevMonthKey = sortedMonths[i - 1];
-      const prevSummary = result[prevMonthKey];
-      if (prevSummary && prevSummary.isClosed) {
-        opening = prevSummary.closingBalance;
-      } else {
-        opening = 0;
-      }
+    if (dbMonth && dbMonth.opening_balance !== null && dbMonth.opening_balance !== undefined) {
+      opening = Number(dbMonth.opening_balance);
     }
 
     // Closing balance rule:

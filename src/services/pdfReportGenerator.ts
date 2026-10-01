@@ -8,6 +8,10 @@ import {
 import {
   calculatePartnerBalancesForDate,
   calculatePartnerBalancesForMonth,
+  isIncomeAssignedToPartner,
+  isExpensePaidByPartner,
+  isSettlementForPartner,
+  getSettlementDirection,
 } from '../utils/partnerBalanceUtils';
 
 // Format currency as Rs. 1,25,000 or -Rs. 2,000
@@ -452,8 +456,11 @@ const drawSummaryBox = (
   activePartners.forEach((p, idx) => {
     const rounded = Math.round((p.toHotel + Number.EPSILON) * 100) / 100;
     const isPositive = rounded > 0;
+    const isIrshad = (p.partner || '').trim().toUpperCase() === 'IRSHAD';
     const partnerLabel = isPositive
-      ? `${p.partner} TO HOTEL: ${formatPdfCurrency(rounded)}`
+      ? (isIrshad
+          ? `IRSHAD OUTSTANDING: ${formatPdfCurrency(rounded)}`
+          : `${p.partner} TO HOTEL: ${formatPdfCurrency(rounded)}`)
       : `HOTEL TO ${p.partner}: ${formatPdfCurrency(Math.abs(rounded))}`;
 
     const boxY = y + 65 + idx * 16;
@@ -1172,6 +1179,582 @@ export const generateMonthlyAccountsPdf = (
 
   // 3. Draw Page Numbers and Headers across all generated pages
   drawPageHeaderAndFooter(doc, fontFamily, pageWidth, pageHeight, leftMargin, rightMargin);
+
+  return doc;
+};
+
+/**
+ * GENERATE CLOSING BALANCE PDF (Strictly 1 Page, Luxury Black & Gold Design)
+ * Specifically for Analytics -> Closing Balance page
+ */
+export const generateClosingBalancePdf = (
+  monthStr: string, // YYYY-MM
+  incomeRecords: IncomeRecord[],
+  expenseRecords: ExpenseRecord[],
+  accountMonths?: AccountMonthRow[],
+  partnerSettlements?: PartnerSettlement[],
+  partners?: Partner[]
+): jsPDF => {
+  // 1. Calculate Monthly Summaries
+  const allMonths = calculateAllMonthsSummary(
+    incomeRecords,
+    expenseRecords,
+    accountMonths,
+    partnerSettlements
+  );
+
+  const monthIncome = incomeRecords.filter((r) => r.date && r.date.startsWith(monthStr));
+  const monthExpenses = expenseRecords.filter((r) => r.date && r.date.startsWith(monthStr));
+
+  const totalIncome = monthIncome.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
+  const totalExpense = monthExpenses.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
+
+  const monthData = allMonths[monthStr];
+  const openingBalance = monthData?.openingBalance ?? 0;
+  const closingBalance = monthData?.closingBalance ?? (openingBalance + totalIncome - totalExpense);
+
+  const dbMonth = accountMonths?.find((m) => m.month_start && m.month_start.startsWith(monthStr));
+  const isClosed = Boolean(dbMonth?.is_closed ?? monthData?.isClosed);
+
+  const monthFormatted = formatPdfMonth(monthStr); // e.g. "September 2026"
+
+  // Profit Distribution Calculations (75% / 25% of Closing Balance)
+  const profitMagnifique = Math.round(Math.max(0, closingBalance) * 0.75);
+  const profitPartners = Math.round(Math.max(0, closingBalance) * 0.25);
+
+  // 2. Partner Data Extraction
+  // Target partners: IRSHAD, ANSARI, SATHISH, YOGESH (and any other active partners)
+  const targetPartners = ['IRSHAD', 'ANSARI', 'SATHISH', 'YOGESH'];
+  const allPartnersList = partners || [];
+
+  // Collect all distinct months up to selected monthStr
+  const monthsSet = new Set<string>();
+  incomeRecords.forEach((r) => r.date && monthsSet.add(r.date.substring(0, 7)));
+  expenseRecords.forEach((r) => r.date && monthsSet.add(r.date.substring(0, 7)));
+  (partnerSettlements || []).forEach((s) => {
+    const m = s.settlementMonth
+      ? s.settlementMonth.substring(0, 7)
+      : s.date
+      ? s.date.substring(0, 7)
+      : '';
+    if (m) monthsSet.add(m);
+  });
+  if (monthStr) monthsSet.add(monthStr);
+
+  const allSortedMonths = Array.from(monthsSet)
+    .filter((m) => m <= monthStr)
+    .sort();
+
+  interface BalanceMonthItem {
+    month: string;
+    monthName: string;
+    amount: number;
+    direction: 'to_hotel' | 'from_hotel';
+  }
+
+  interface PartnerPdfSection {
+    partnerName: string;
+    balanceLabel: string;
+    balanceDirection: 'to_hotel' | 'from_hotel';
+    balanceMonths: BalanceMonthItem[];
+    totalBalance: number;
+    showBalanceTotal: boolean;
+    expenseLabel: string;
+    expenseMonths: { month: string; monthName: string; amount: number }[];
+    totalExpense: number;
+    showExpenseTotal: boolean;
+  }
+
+  const partnerSections: PartnerPdfSection[] = [];
+
+  for (const name of targetPartners) {
+    const p = allPartnersList.find((pt) => pt.name.trim().toUpperCase() === name);
+    const pid = p?.id;
+
+    const balanceMonths: BalanceMonthItem[] = [];
+    const expenseMonths: { month: string; monthName: string; amount: number }[] = [];
+
+    for (const m of allSortedMonths) {
+      const mInc = incomeRecords
+        .filter((r) => r.date && r.date.startsWith(m) && isIncomeAssignedToPartner(r, name, pid))
+        .reduce((sum, r) => sum + (Number(r.balance) > 0 ? Number(r.balance) : 0), 0);
+      const mExp = expenseRecords
+        .filter((r) => r.date && r.date.startsWith(m) && isExpensePaidByPartner(r, name, pid))
+        .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+
+      const mSettled = (partnerSettlements || []).filter((s) => {
+        if (!isSettlementForPartner(s, name, pid)) return false;
+        const sM = s.settlementMonth
+          ? s.settlementMonth.substring(0, 7)
+          : s.date
+          ? s.date.substring(0, 7)
+          : '';
+        return sM === m;
+      });
+
+      const toHotel = mSettled
+        .filter((s) => getSettlementDirection(s) === 'to_hotel')
+        .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+      const fromHotel = mSettled
+        .filter((s) => getSettlementDirection(s) === 'from_hotel')
+        .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+
+      const net = Math.round(mInc - mExp - toHotel + fromHotel);
+      if (net > 0) {
+        balanceMonths.push({
+          month: m,
+          monthName: formatPdfMonth(m).split(' ')[0],
+          amount: net,
+          direction: 'to_hotel',
+        });
+      } else if (net < 0) {
+        balanceMonths.push({
+          month: m,
+          monthName: formatPdfMonth(m).split(' ')[0],
+          amount: Math.abs(net),
+          direction: 'from_hotel',
+        });
+      }
+
+      if (mExp > 0) {
+        expenseMonths.push({
+          month: m,
+          monthName: formatPdfMonth(m).split(' ')[0],
+          amount: mExp,
+        });
+      }
+    }
+
+    // Cumulative net balance across all months up to selected month
+    const cumulativeNet = allSortedMonths.reduce((sum, m) => {
+      const mInc = incomeRecords
+        .filter((r) => r.date && r.date.startsWith(m) && isIncomeAssignedToPartner(r, name, pid))
+        .reduce((s, r) => s + (Number(r.balance) > 0 ? Number(r.balance) : 0), 0);
+      const mExp = expenseRecords
+        .filter((r) => r.date && r.date.startsWith(m) && isExpensePaidByPartner(r, name, pid))
+        .reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      const mSettled = (partnerSettlements || []).filter((s) => {
+        if (!isSettlementForPartner(s, name, pid)) return false;
+        const sM = s.settlementMonth
+          ? s.settlementMonth.substring(0, 7)
+          : s.date
+          ? s.date.substring(0, 7)
+          : '';
+        return sM === m;
+      });
+      const toHotel = mSettled
+        .filter((s) => getSettlementDirection(s) === 'to_hotel')
+        .reduce((s, sItem) => s + (Number(sItem.amount) || 0), 0);
+      const fromHotel = mSettled
+        .filter((s) => getSettlementDirection(s) === 'from_hotel')
+        .reduce((s, sItem) => s + (Number(sItem.amount) || 0), 0);
+      return sum + (mInc - mExp - toHotel + fromHotel);
+    }, 0);
+
+    const balanceDirection: 'to_hotel' | 'from_hotel' = cumulativeNet >= 0 ? 'to_hotel' : 'from_hotel';
+    const balanceLabel = balanceDirection === 'to_hotel'
+      ? `${name} TO HOTEL`
+      : `HOTEL TO ${name}`;
+
+    const totalBalance = Math.abs(Math.round(cumulativeNet));
+    // Rule: Only show TOTAL OUTSTANDING when partner has outstanding from 2 OR MORE months
+    const showBalanceTotal = balanceMonths.length >= 2;
+    const totalExpense = expenseMonths.reduce((sum, e) => sum + e.amount, 0);
+    // Rule: Only show TOTAL EXPENSE when partner has expense from 2 OR MORE months
+    const showExpenseTotal = expenseMonths.length >= 2;
+    const expenseLabel = `EXPENSE BY ${name}`;
+
+    // Only include partner if they have balance or expenses
+    if (balanceMonths.length > 0 || expenseMonths.length > 0) {
+      partnerSections.push({
+        partnerName: name,
+        balanceLabel,
+        balanceDirection,
+        balanceMonths,
+        totalBalance,
+        showBalanceTotal,
+        expenseLabel,
+        expenseMonths,
+        totalExpense,
+        showExpenseTotal,
+      });
+    }
+  }
+
+  // 3. Initialize jsPDF (Strictly 1-page A4 Portrait)
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'pt',
+    format: 'a4',
+  });
+
+  const fontFamily = PDF_FONT;
+  const pageWidth = doc.internal.pageSize.getWidth(); // ~595.28 pt
+  const pageHeight = doc.internal.pageSize.getHeight(); // ~841.89 pt
+  const leftMargin = 32;
+  const rightMargin = 32;
+  const contentWidth = pageWidth - leftMargin - rightMargin; // ~531.28 pt
+
+  // Luxury Background Subtle Accent
+  doc.setFillColor(254, 254, 252);
+  doc.rect(0, 0, pageWidth, pageHeight, 'F');
+
+  // Top Dark Border Bar
+  doc.setFillColor(26, 26, 26);
+  doc.rect(0, 0, pageWidth, 5, 'F');
+
+  // --- TOP HEADER ---
+  let currentY = 38;
+
+  // Title: MAGNIFIQUE 2.0
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(18);
+  doc.setTextColor(20, 20, 20);
+  doc.text('MAGNIFIQUE 2.0', leftMargin, currentY);
+
+  // Sub-title: CLOSING BALANCE
+  currentY += 16;
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(190, 140, 20); // Luxury Gold
+  doc.text('CLOSING BALANCE', leftMargin, currentY);
+
+  // Month: September 2026
+  currentY += 14;
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(70, 70, 70);
+  doc.text(monthFormatted, leftMargin, currentY);
+
+  // Status Badge on the right
+  const statusText = isClosed ? 'MONTH STATUS: CLOSED' : 'MONTH STATUS: ACTIVE / OPEN';
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(8);
+  const badgeTextWidth = doc.getTextWidth(statusText);
+  const badgePaddingX = 10;
+  const badgeWidth = badgeTextWidth + badgePaddingX * 2;
+  const badgeHeight = 20;
+  const badgeX = pageWidth - rightMargin - badgeWidth;
+  const badgeY = 36;
+
+  if (isClosed) {
+    doc.setFillColor(254, 242, 242); // Soft red
+    doc.setDrawColor(239, 68, 68);
+    doc.roundedRect(badgeX, badgeY, badgeWidth, badgeHeight, 3, 3, 'FD');
+    doc.setTextColor(185, 28, 28);
+    doc.text(statusText, badgeX + badgePaddingX, badgeY + 13.5);
+  } else {
+    doc.setFillColor(240, 253, 244); // Soft green
+    doc.setDrawColor(34, 197, 94);
+    doc.roundedRect(badgeX, badgeY, badgeWidth, badgeHeight, 3, 3, 'FD');
+    doc.setTextColor(21, 128, 61);
+    doc.text(statusText, badgeX + badgePaddingX, badgeY + 13.5);
+  }
+
+  // Gold Divider Line
+  currentY += 12;
+  doc.setDrawColor(212, 175, 55);
+  doc.setLineWidth(1.5);
+  doc.line(leftMargin, currentY, pageWidth - rightMargin, currentY);
+
+  // --- SECTION: 3 KEY METRICS ---
+  currentY += 14;
+
+  const cardGap = 10;
+  const cardWidth = (contentWidth - cardGap * 2) / 3;
+  const cardHeight = 48;
+
+  // 1. TOTAL INCOME
+  const col1X = leftMargin;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(187, 247, 208); // Green border
+  doc.setLineWidth(0.8);
+  doc.roundedRect(col1X, currentY, cardWidth, cardHeight, 3, 3, 'FD');
+
+  doc.setFillColor(34, 197, 94);
+  doc.rect(col1X, currentY, cardWidth, 2.5, 'F');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(22, 101, 52);
+  doc.text('TOTAL INCOME', col1X + 10, currentY + 16);
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(12.5);
+  doc.setTextColor(22, 101, 52);
+  doc.text(formatPdfCurrency(totalIncome), col1X + 10, currentY + 36);
+
+  // 2. TOTAL EXPENSE
+  const col2X = col1X + cardWidth + cardGap;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(254, 202, 202); // Red border
+  doc.setLineWidth(0.8);
+  doc.roundedRect(col2X, currentY, cardWidth, cardHeight, 3, 3, 'FD');
+
+  doc.setFillColor(239, 68, 68);
+  doc.rect(col2X, currentY, cardWidth, 2.5, 'F');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(185, 28, 28);
+  doc.text('TOTAL EXPENSE', col2X + 10, currentY + 16);
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(12.5);
+  doc.setTextColor(185, 28, 28);
+  doc.text(formatPdfCurrency(totalExpense), col2X + 10, currentY + 36);
+
+  // 3. CLOSING BALANCE
+  const col3X = col2X + cardWidth + cardGap;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(212, 175, 55); // Gold border
+  doc.setLineWidth(1.0);
+  doc.roundedRect(col3X, currentY, cardWidth, cardHeight, 3, 3, 'FD');
+
+  doc.setFillColor(212, 175, 55);
+  doc.rect(col3X, currentY, cardWidth, 2.5, 'F');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(180, 130, 20);
+  doc.text('CLOSING BALANCE', col3X + 10, currentY + 16);
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(12.5);
+  doc.setTextColor(180, 130, 20);
+  doc.text(formatPdfCurrency(closingBalance), col3X + 10, currentY + 36);
+
+  // --- SECTION: PROFIT DISTRIBUTION ---
+  currentY += cardHeight + 10;
+  const pCardW = (contentWidth - 10) / 2;
+  const pCardH = 38;
+
+  // Magnifique 75%
+  doc.setFillColor(254, 253, 248);
+  doc.setDrawColor(212, 175, 55);
+  doc.setLineWidth(0.8);
+  doc.roundedRect(leftMargin, currentY, pCardW, pCardH, 3, 3, 'FD');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(180, 130, 20);
+  doc.text('PROFIT DISTRIBUTION • MAGNIFIQUE 75%', leftMargin + 10, currentY + 14);
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(20, 20, 20);
+  doc.text(formatPdfCurrency(profitMagnifique), leftMargin + 10, currentY + 30);
+
+  // Irshad + Ansari 25%
+  const pCol2X = leftMargin + pCardW + 10;
+  doc.setFillColor(250, 254, 250);
+  doc.setDrawColor(187, 247, 208);
+  doc.setLineWidth(0.8);
+  doc.roundedRect(pCol2X, currentY, pCardW, pCardH, 3, 3, 'FD');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(22, 101, 52);
+  doc.text('PROFIT DISTRIBUTION • IRSHAD + ANSARI 25%', pCol2X + 10, currentY + 14);
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(20, 20, 20);
+  doc.text(formatPdfCurrency(profitPartners), pCol2X + 10, currentY + 30);
+
+  // --- SECTION: PARTNER OUTSTANDING & EXPENSES ---
+  currentY += pCardH + 14;
+
+  // Header Banner
+  doc.setFillColor(26, 26, 26);
+  doc.roundedRect(leftMargin, currentY, contentWidth, 22, 2, 2, 'F');
+
+  doc.setFillColor(212, 175, 55); // Gold indicator
+  doc.rect(leftMargin, currentY, 3.5, 22, 'F');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('PARTNER OUTSTANDING & EXPENSES', leftMargin + 12, currentY + 14.5);
+
+  currentY += 30;
+  const footerY = pageHeight - 48;
+
+  if (partnerSections.length === 0) {
+    // Clean Empty State
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(230, 230, 230);
+    doc.setLineWidth(0.8);
+    doc.roundedRect(leftMargin, currentY, contentWidth, 36, 2, 2, 'FD');
+
+    doc.setFont(fontFamily, 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(110, 110, 110);
+    doc.text('All partner accounts are fully settled or balanced for this period.', leftMargin + 14, currentY + 22);
+  } else {
+    // Render Separate Card for EACH Partner
+    for (const pSec of partnerSections) {
+      // Calculate dynamic card height
+      let linesCount = 0;
+      if (pSec.balanceMonths.length > 0) {
+        linesCount += 1 + pSec.balanceMonths.length + (pSec.showBalanceTotal ? 1 : 0);
+      }
+      if (pSec.expenseMonths.length > 0) {
+        if (pSec.balanceMonths.length > 0) linesCount += 0.4; // divider spacing
+        linesCount += 1 + pSec.expenseMonths.length + (pSec.showExpenseTotal ? 1 : 0);
+      }
+
+      // Height: Header bar (20pt) + content lines + padding
+      const cardContentH = 20 + Math.ceil(linesCount * 13) + 8;
+
+      // Page boundary check
+      if (currentY + cardContentH > footerY - 10) {
+        doc.addPage();
+        doc.setFillColor(254, 254, 252);
+        doc.rect(0, 0, pageWidth, pageHeight, 'F');
+        doc.setFillColor(26, 26, 26);
+        doc.rect(0, 0, pageWidth, 5, 'F');
+        currentY = 35;
+      }
+
+      // Card Container
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(220, 220, 218);
+      doc.setLineWidth(0.75);
+      doc.roundedRect(leftMargin, currentY, contentWidth, cardContentH, 2.5, 2.5, 'FD');
+
+      // Card Header: Partner Name
+      doc.setFillColor(248, 248, 246);
+      doc.roundedRect(leftMargin, currentY, contentWidth, 20, 2.5, 2.5, 'F');
+      doc.setFillColor(212, 175, 55);
+      doc.rect(leftMargin, currentY, 3, 20, 'F');
+
+      doc.setFont(fontFamily, 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(20, 20, 20);
+      doc.text(pSec.partnerName, leftMargin + 10, currentY + 13.5);
+
+      let innerY = currentY + 30;
+
+      // Subsection A: BALANCE TO HOTEL / HOTEL TO PARTNER
+      if (pSec.balanceMonths.length > 0) {
+        doc.setFont(fontFamily, 'bold');
+        doc.setFontSize(7.5);
+        if (pSec.balanceDirection === 'to_hotel') {
+          doc.setTextColor(180, 130, 20);
+        } else {
+          doc.setTextColor(21, 128, 61);
+        }
+        doc.text(pSec.balanceLabel, leftMargin + 12, innerY);
+        innerY += 12;
+
+        pSec.balanceMonths.forEach((b) => {
+          doc.setFont(fontFamily, 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(50, 50, 50);
+          doc.text(b.monthName, leftMargin + 18, innerY);
+
+          doc.setFont(fontFamily, 'bold');
+          doc.setTextColor(20, 20, 20);
+          doc.text(formatPdfCurrency(b.amount), leftMargin + contentWidth - 16, innerY, { align: 'right' });
+          innerY += 13;
+        });
+
+        // Show TOTAL OUTSTANDING only if >= 2 months
+        if (pSec.showBalanceTotal) {
+          doc.setFont(fontFamily, 'bold');
+          doc.setFontSize(8.5);
+          if (pSec.balanceDirection === 'to_hotel') {
+            doc.setTextColor(180, 130, 20);
+          } else {
+            doc.setTextColor(21, 128, 61);
+          }
+          doc.text('TOTAL OUTSTANDING', leftMargin + 18, innerY);
+          doc.text(formatPdfCurrency(pSec.totalBalance), leftMargin + contentWidth - 16, innerY, { align: 'right' });
+          innerY += 14;
+        }
+      }
+
+      // Subsection B: EXPENSE BY PARTNER
+      if (pSec.expenseMonths.length > 0) {
+        if (pSec.balanceMonths.length > 0) {
+          doc.setDrawColor(235, 235, 235);
+          doc.setLineWidth(0.5);
+          doc.line(leftMargin + 10, innerY - 4, leftMargin + contentWidth - 10, innerY - 4);
+          innerY += 4;
+        }
+
+        doc.setFont(fontFamily, 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(185, 28, 28);
+        doc.text(pSec.expenseLabel, leftMargin + 12, innerY);
+        innerY += 12;
+
+        pSec.expenseMonths.forEach((e) => {
+          doc.setFont(fontFamily, 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(50, 50, 50);
+          doc.text(e.monthName, leftMargin + 18, innerY);
+
+          doc.setFont(fontFamily, 'bold');
+          doc.setTextColor(20, 20, 20);
+          doc.text(formatPdfCurrency(e.amount), leftMargin + contentWidth - 16, innerY, { align: 'right' });
+          innerY += 13;
+        });
+
+        // Show TOTAL EXPENSE only if >= 2 months
+        if (pSec.showExpenseTotal) {
+          doc.setFont(fontFamily, 'bold');
+          doc.setFontSize(8.5);
+          doc.setTextColor(185, 28, 28);
+          doc.text('TOTAL EXPENSE', leftMargin + 18, innerY);
+          doc.text(formatPdfCurrency(pSec.totalExpense), leftMargin + contentWidth - 16, innerY, { align: 'right' });
+          innerY += 14;
+        }
+      }
+
+      currentY += cardContentH + 8;
+    }
+  }
+
+  // --- FOOTER & OFFICIAL SIGN-OFF ---
+  const totalPages = doc.getNumberOfPages();
+  const now = new Date();
+  const dateFormatted = formatPdfDateMedium(now.toISOString().substring(0, 10));
+  const timeFormatted = now.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+    doc.setPage(pageNum);
+    const footerY = pageHeight - 48;
+
+    doc.setDrawColor(212, 175, 55); // Gold line
+    doc.setLineWidth(0.75);
+    doc.line(leftMargin, footerY, pageWidth - rightMargin, footerY);
+
+    doc.setFont(fontFamily, 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(120, 120, 120);
+    doc.text(`Generated on: ${dateFormatted}, ${timeFormatted}`, leftMargin, footerY + 15);
+
+    doc.setFont(fontFamily, 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(180, 130, 20);
+    doc.text('Official Monthly Closing Record', leftMargin, footerY + 27);
+
+    doc.setFont(fontFamily, 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(40, 40, 40);
+    doc.text('Magnifique Business Management System', pageWidth - rightMargin, footerY + 15, { align: 'right' });
+
+    doc.setFont(fontFamily, 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(130, 130, 130);
+    doc.text(`Page ${pageNum} of ${totalPages}`, pageWidth - rightMargin, footerY + 27, { align: 'right' });
+  }
 
   return doc;
 };

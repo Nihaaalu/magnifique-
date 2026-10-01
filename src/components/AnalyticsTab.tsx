@@ -49,6 +49,8 @@ import {
 } from '../utils/analyticsUtils';
 import { generateAnalyticsPDF } from '../services/analyticsPdfGenerator';
 import { generatePartnerAnalyticsPDF } from '../services/partnerAnalyticsPdfGenerator';
+import { ClosingBalancePage } from './ClosingBalancePage';
+import { PartnerSettlementRow } from '../types';
 
 interface AnalyticsTabProps {
   incomeRecords: IncomeRecord[];
@@ -59,6 +61,8 @@ interface AnalyticsTabProps {
   onCloseMonth?: (monthStr: string, closingBalance: number) => Promise<void>;
   onReopenMonth?: (monthStr: string) => Promise<void>;
   onLockApp?: () => void;
+  onAddSettlement?: (settlement: Omit<PartnerSettlementRow, 'id' | 'created_at'>) => Promise<void>;
+  onDeleteSettlement?: (id: string) => Promise<void>;
 }
 
 export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
@@ -70,6 +74,8 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
   onCloseMonth,
   onReopenMonth,
   onLockApp,
+  onAddSettlement,
+  onDeleteSettlement,
 }) => {
   const [profitShare, setProfitShare] = useState<ProfitShareResult | null>(null);
   const [downloadMsg, setDownloadMsg] = useState<string | null>(null);
@@ -77,6 +83,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
   const [generatingType, setGeneratingType] = useState<string | null>(null);
   const [isProcessingClose, setIsProcessingClose] = useState<boolean>(false);
   const [isChangePinOpen, setIsChangePinOpen] = useState<boolean>(false);
+  const [closingPageMonth, setClosingPageMonth] = useState<string | null>(null);
 
   const todayStr = getTodayDateString();
   const currentMonthStr = getCurrentMonthString();
@@ -419,6 +426,24 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
       yogeshShare: share25,
     });
   };
+
+  if (closingPageMonth) {
+    return (
+      <ClosingBalancePage
+        initialMonth={closingPageMonth}
+        incomeRecords={incomeRecords}
+        expenseRecords={expenseRecords}
+        accountMonths={accountMonths}
+        partnerSettlements={partnerSettlements}
+        partners={partners}
+        onBack={() => setClosingPageMonth(null)}
+        onCloseMonth={onCloseMonth}
+        onReopenMonth={onReopenMonth}
+        onAddSettlement={onAddSettlement}
+        onDeleteSettlement={onDeleteSettlement}
+      />
+    );
+  }
 
   return (
     <div id="analytics-tab-container" className="space-y-6">
@@ -820,22 +845,33 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               <button
                 type="button"
                 id="btn-close-month"
-                onClick={() => handleInitiateClose(selectedMonth)}
+                onClick={() => setClosingPageMonth(selectedMonth)}
                 className="w-full px-4 py-2.5 bg-[#201212] hover:bg-[#3d1d1d] border border-[#f87171]/40 text-[#f87171] rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
               >
                 <Lock className="w-3.5 h-3.5" />
                 <span>CLOSE BALANCE FOR THIS MONTH</span>
               </button>
             ) : (
-              <button
-                type="button"
-                id="btn-reopen-month"
-                onClick={() => handleReopenMonth(selectedMonth)}
-                className="w-full px-4 py-2.5 bg-[#111111] hover:bg-[#1D1D1D] border border-[#2A2A2A] text-[#B8B8B8] hover:text-[#F5F5F5] rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
-              >
-                <Unlock className="w-3.5 h-3.5 text-[#D4AF37]" />
-                <span>Re-open Month</span>
-              </button>
+              <div className="flex flex-col sm:flex-row items-center gap-2">
+                <button
+                  type="button"
+                  id="btn-view-closing-balance"
+                  onClick={() => setClosingPageMonth(selectedMonth)}
+                  className="w-full sm:flex-1 px-4 py-2.5 bg-[#171717] hover:bg-[#222222] border border-[#D4AF37]/50 text-[#D4AF37] rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>VIEW CLOSING BALANCE</span>
+                </button>
+                <button
+                  type="button"
+                  id="btn-reopen-month"
+                  onClick={() => handleReopenMonth(selectedMonth)}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-[#111111] hover:bg-[#1D1D1D] border border-[#2A2A2A] text-[#B8B8B8] hover:text-[#F5F5F5] rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
+                >
+                  <Unlock className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>Re-open Month</span>
+                </button>
+              </div>
             )}
           </div>
         </div>

@@ -639,6 +639,7 @@ export async function fetchPartnerSettlements(): Promise<PartnerSettlement[]> {
       amount,
       settlement_type,
       notes,
+      settlement_month,
       created_at,
       partners:partner_id ( id, name )
     `
@@ -669,6 +670,7 @@ export async function fetchPartnerSettlements(): Promise<PartnerSettlement[]> {
       amount: Number(row.amount) || 0,
       date: row.settlement_date,
       notes: row.notes || undefined,
+      settlementMonth: row.settlement_month || null,
       created_at: row.created_at,
     };
   });
@@ -681,13 +683,23 @@ export async function createPartnerSettlement(
     settlement.settlement_type === 'balance_to_hotel' ||
     settlement.settlement_type === 'to_hotel';
 
-  const insertPayload = {
+  const insertPayload: any = {
     partner_id: Number(settlement.partner_id) || settlement.partner_id,
     settlement_date: settlement.settlement_date,
     amount: Number(settlement.amount) || 0,
     settlement_type: isToHotel ? 'to_hotel' : 'from_hotel',
     notes: settlement.notes || null,
   };
+
+  let sMonth = settlement.settlement_month;
+  if (!sMonth && settlement.settlement_date) {
+    sMonth = `${settlement.settlement_date.substring(0, 7)}-01`;
+  } else if (sMonth && sMonth.length === 7) {
+    sMonth = `${sMonth}-01`;
+  }
+  if (sMonth) {
+    insertPayload.settlement_month = sMonth;
+  }
 
   const { data, error } = await supabase
     .from('partner_settlements')
@@ -722,6 +734,13 @@ export async function updatePartnerSettlement(
   }
   if (settlement.notes !== undefined) {
     updatePayload.notes = settlement.notes ? settlement.notes.trim() : null;
+  }
+  if (settlement.settlement_month !== undefined) {
+    let sMonth = settlement.settlement_month;
+    if (sMonth && sMonth.length === 7) {
+      sMonth = `${sMonth}-01`;
+    }
+    updatePayload.settlement_month = sMonth || null;
   }
 
   const { data, error } = await supabase
@@ -940,6 +959,18 @@ export async function closeAccountMonthInDb(
 ): Promise<void> {
   const dbMonthStart = formatMonthStartDb(monthKey);
   const monthPrefix = monthKey.substring(0, 7);
+
+  // Attempt close_account_month RPC first if permitted
+  try {
+    const { error: rpcError } = await supabase.rpc('close_account_month', {
+      p_month_start: dbMonthStart,
+    });
+    if (!rpcError) {
+      return;
+    }
+  } catch {
+    // Graceful fallback to direct update
+  }
 
   const updatePayload = {
     is_closed: true,

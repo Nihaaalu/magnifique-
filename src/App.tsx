@@ -410,6 +410,17 @@ export default function App() {
   // Month Close / Reopen Operations
   const handleCloseMonth = async (monthStr: string, closingBalance: number) => {
     await closeAccountMonthInDb(monthStr, closingBalance);
+    // Set next month's normal accounting opening balance to 0
+    try {
+      const [y, m] = monthStr.split('-').map(Number);
+      const nextDate = new Date(y, m, 1);
+      const nextY = nextDate.getFullYear();
+      const nextM = String(nextDate.getMonth() + 1).padStart(2, '0');
+      const nextMonthKey = `${nextY}-${nextM}`;
+      await getOrCreateAccountMonth(nextMonthKey, 0);
+    } catch (e) {
+      console.warn('Could not initialize next month opening balance:', e);
+    }
     const updatedMonths = await fetchAccountMonths();
     setAccountMonths(updatedMonths);
   };
@@ -528,6 +539,8 @@ export default function App() {
             partners={partners}
             partnerBalances={partnerBalances}
             partnerSettlements={partnerSettlements}
+            incomeRecords={incomeRecords}
+            expenseRecords={expenseRecords}
             onAddSettlement={handleAddSettlement}
             onUpdateSettlement={handleUpdateSettlement}
             onDeleteSettlement={handleDeleteSettlement}
@@ -545,6 +558,8 @@ export default function App() {
             onCloseMonth={handleCloseMonth}
             onReopenMonth={handleReopenMonth}
             onLockApp={handleLockApp}
+            onAddSettlement={handleAddSettlement}
+            onDeleteSettlement={handleDeleteSettlement}
           />
         )}
       </main>

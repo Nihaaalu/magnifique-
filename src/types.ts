@@ -115,6 +115,7 @@ export interface PartnerSettlementRow {
   amount: number;
   settlement_type: string;
   notes: string | null;
+  settlement_month?: string | null;
   created_at?: string;
 }
 
@@ -126,6 +127,7 @@ export interface PartnerSettlement {
   amount: number;
   date: string;
   notes?: string;
+  settlementMonth?: string | null;
   created_at?: string;
 }
 
