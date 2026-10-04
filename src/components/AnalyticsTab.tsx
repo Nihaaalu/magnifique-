@@ -21,6 +21,7 @@ import {
   calculateAllMonthsSummary,
   getAllAvailableAccountDates,
   getAllAvailableAccountMonths,
+  getExpenseAccountingMonth,
   MonthBalanceSummary,
 } from '../utils/accountBalanceUtils';
 import {
@@ -38,6 +39,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   KeyRound,
   Shield,
 } from 'lucide-react';
@@ -48,7 +50,10 @@ import {
   calculateMealCounts,
 } from '../utils/analyticsUtils';
 import { generateAnalyticsPDF } from '../services/analyticsPdfGenerator';
-import { generatePartnerAnalyticsPDF } from '../services/partnerAnalyticsPdfGenerator';
+import {
+  generatePartnerAnalyticsPDF,
+  PartnerReportType,
+} from '../services/partnerAnalyticsPdfGenerator';
 import { ClosingBalancePage } from './ClosingBalancePage';
 import { PartnerSettlementRow } from '../types';
 
@@ -118,9 +123,32 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
     return availableMonths.length > 0 ? availableMonths[availableMonths.length - 1] : currentMonthStr;
   });
 
-  // Close Month Dialog State
-  const [closeStep, setCloseStep] = useState<1 | 2 | null>(null);
-  const [monthToClose, setMonthToClose] = useState<string | null>(null);
+  // Monthly Summary Collapsible state (collapsed by default)
+  const [isMonthlySummaryExpanded, setIsMonthlySummaryExpanded] = useState<boolean>(false);
+
+  // Partner Analytics state
+  const [selectedAnalyticsPartner, setSelectedAnalyticsPartner] = useState<string>('IRSHAD');
+  const [selectedPartnerMonth, setSelectedPartnerMonth] = useState<string>(() => {
+    if (availableMonths.includes(currentMonthStr)) {
+      return currentMonthStr;
+    }
+    return availableMonths.length > 0 ? availableMonths[availableMonths.length - 1] : currentMonthStr;
+  });
+  const [selectedReportType, setSelectedReportType] = useState<PartnerReportType>('EXPENSE');
+
+  const analyticsPartners = ['IRSHAD', 'ANSARI', 'MUSADDIQ', 'SATHISH', 'YOGESH'];
+  const reportTypes: PartnerReportType[] = ['EXPENSE', 'INCOME', 'INCOME + EXPENSE'];
+
+  // Close / Re-open Target Month State & Dialogs
+  const [selectedCloseMonth, setSelectedCloseMonth] = useState<string>(() => {
+    if (availableMonths.includes(currentMonthStr)) {
+      return currentMonthStr;
+    }
+    return availableMonths.length > 0 ? availableMonths[availableMonths.length - 1] : currentMonthStr;
+  });
+  const [isConfirmCloseOpen, setIsConfirmCloseOpen] = useState<boolean>(false);
+  const [isConfirmReopenOpen, setIsConfirmReopenOpen] = useState<boolean>(false);
+  const [isProcessingReopen, setIsProcessingReopen] = useState<boolean>(false);
 
   // Compute all months summary using persistent account_months and partnerSettlements
   const allMonthsSummary = calculateAllMonthsSummary(
@@ -275,7 +303,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
         (r) => r.date && r.date.startsWith(targetMonth)
       );
       const monthExpense = expenseRecords.filter(
-        (r) => r.date && r.date.startsWith(targetMonth)
+        (r) => getExpenseAccountingMonth(r) === targetMonth
       );
 
       const [year, month] = targetMonth.split('-');
@@ -311,11 +339,14 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
     }
   };
 
-  // 4. Download Partner Analytics PDF (e.g. IRSHAD) for currently selected month
-  const handleDownloadPartnerAnalyticsPdf = async (partnerName: string) => {
-    const targetMonth = selectedMonth || selectedReportMonth;
+  // 4. Download Partner Analytics PDF (e.g. IRSHAD, ANSARI, etc.) for specified accounting month
+  const handleDownloadPartnerAnalyticsPdf = async (
+    partnerName: string,
+    targetMonth: string,
+    reportType: PartnerReportType = 'EXPENSE'
+  ) => {
     if (generatingType || !targetMonth) return;
-    setGeneratingType(`partner-${partnerName}`);
+    setGeneratingType(`partner-${partnerName}-${targetMonth}-${reportType}`);
     setDownloadError(null);
     setDownloadMsg(null);
 
@@ -330,6 +361,8 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
 
       await generatePartnerAnalyticsPDF({
         partnerName,
+        reportType,
+        accountingMonth: targetMonth,
         dateRangeLabel: periodLabel,
         startDate,
         endDate,
@@ -338,77 +371,76 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
         partners,
       });
 
-      const fileName = `Magnifique_${partnerName}_Analytics_Report_${targetMonth}.pdf`;
-      setDownloadMsg(`${partnerName} Analytics PDF downloaded successfully: ${fileName}`);
+      const typeLabel =
+        reportType === 'INCOME'
+          ? 'Income'
+          : reportType === 'INCOME + EXPENSE'
+          ? 'Income & Expense'
+          : 'Expense';
+
+      setDownloadMsg(
+        `${partnerName} ${typeLabel} Analytics PDF for ${formatPdfMonth(targetMonth)} downloaded successfully.`
+      );
       setTimeout(() => setDownloadMsg(null), 4000);
     } catch (err: any) {
       console.error(`Failed to generate ${partnerName} analytics PDF:`, err);
-      setDownloadError(err.message || `Failed to generate ${partnerName} Analytics PDF. Please try again.`);
+      setDownloadError(
+        err.message || `Failed to generate ${partnerName} Analytics PDF. Please try again.`
+      );
     } finally {
       setGeneratingType(null);
     }
   };
 
-  // Close Month Workflows (Two-step confirmation)
-  const handleInitiateClose = (monthStr: string) => {
-    setMonthToClose(monthStr);
-    setCloseStep(1);
-  };
+  // Close / Reopen Month Execution Handlers
+  const handleConfirmCloseMonth = async () => {
+    if (!selectedCloseMonth) return;
 
-  const handleConfirmStep1 = () => {
-    setCloseStep(2);
-  };
-
-  const handleConfirmStep2 = async () => {
-    if (!monthToClose) return;
-
-    const summary = allMonthsSummary[monthToClose];
+    const summary = allMonthsSummary[selectedCloseMonth];
     if (summary) {
       setIsProcessingClose(true);
       try {
         if (onCloseMonth) {
-          await onCloseMonth(monthToClose, summary.closingBalance);
+          await onCloseMonth(selectedCloseMonth, summary.closingBalance);
         }
         setDownloadMsg(
           `Month ${formatPdfMonth(
-            monthToClose
+            selectedCloseMonth
           )} has been closed. Final closing balance (${formatCurrency(summary.closingBalance)}) is set as next month's opening balance.`
         );
+        setTimeout(() => setDownloadMsg(null), 4500);
       } catch (err: any) {
         console.error('Failed to close month in Supabase:', err);
         setDownloadError(err.message || 'Failed to close month in Supabase.');
       } finally {
         setIsProcessingClose(false);
+        setIsConfirmCloseOpen(false);
       }
     }
-
-    setCloseStep(null);
-    setMonthToClose(null);
-    setTimeout(() => setDownloadMsg(null), 4500);
   };
 
-  const handleCancelClose = () => {
-    setCloseStep(null);
-    setMonthToClose(null);
-  };
-
-  const handleReopenMonth = async (monthStr: string) => {
+  const handleConfirmReopenMonth = async () => {
+    if (!selectedCloseMonth) return;
+    setIsProcessingReopen(true);
     try {
       if (onReopenMonth) {
-        await onReopenMonth(monthStr);
+        await onReopenMonth(selectedCloseMonth);
       }
-      setDownloadMsg(`Month ${formatPdfMonth(monthStr)} re-opened.`);
+      setDownloadMsg(`Month ${formatPdfMonth(selectedCloseMonth)} re-opened.`);
       setTimeout(() => setDownloadMsg(null), 3000);
     } catch (err: any) {
       console.error('Failed to re-open month:', err);
       setDownloadError(err.message || 'Failed to re-open month.');
+    } finally {
+      setIsProcessingReopen(false);
+      setIsConfirmReopenOpen(false);
     }
   };
 
   // Generate Profit Sharing for Selected Month
   const handleGenerateProfitShare = () => {
     const monthInc = incomeRecords.filter((r) => r.date && r.date.startsWith(selectedMonth));
-    const monthExp = expenseRecords.filter((r) => r.date && r.date.startsWith(selectedMonth));
+    const monthExp = expenseRecords.filter((r) => getExpenseAccountingMonth(r) === selectedMonth);
 
     const totalInc = monthInc.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
     const totalExp = monthExp.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
@@ -646,239 +678,192 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
       </section>
 
       {/* ==================================================
-          SECTION B: MONTHLY SUMMARY & BALANCE SYSTEM
+          SECTION B: MONTHLY SUMMARY & BALANCE SYSTEM (COLLAPSED BY DEFAULT)
           ================================================== */}
       <section id="section-monthly-summary" className="space-y-3">
-        <div className="flex items-center justify-between">
+        {/* Collapsible Header */}
+        <button
+          type="button"
+          id="btn-toggle-monthly-summary"
+          onClick={() => setIsMonthlySummaryExpanded((prev) => !prev)}
+          className="w-full flex items-center justify-between p-3.5 bg-[#171717] rounded-xl border border-[#2A2A2A] hover:bg-[#1D1D1D] transition-colors cursor-pointer text-left select-none shadow-sm"
+        >
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-[#D4AF37]" />
             <h2 className="text-xs font-bold text-[#F5F5F5] tracking-wider uppercase">
               MONTHLY SUMMARY
             </h2>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Month Selector Dropdown (Only months with data) */}
-            <select
-              id="select-summary-month"
-              value={selectedMonth}
-              onChange={(e) => {
-                setSelectedMonth(e.target.value);
-                setSelectedReportMonth(e.target.value);
-              }}
-              disabled={availableMonths.length === 0}
-              className="bg-[#111111] border border-[#2A2A2A] text-[#F5F5F5] text-xs font-bold px-2.5 py-1.5 rounded-md focus:outline-none focus:border-[#D4AF37] cursor-pointer"
-            >
-              {availableMonths.length === 0 ? (
-                <option value="">No months with data</option>
+          <div className="flex items-center gap-2.5">
+            <span className="text-xs font-black text-[#D4AF37] uppercase tracking-wide">
+              {formatPdfMonth(selectedMonth)}
+            </span>
+            <span className="text-[#D4AF37]">
+              {isMonthlySummaryExpanded ? (
+                <ChevronDown className="w-4 h-4" />
               ) : (
-                availableMonths.map((m) => (
-                  <option key={m} value={m}>
-                    {formatPdfMonth(m)} {allMonthsSummary[m]?.isClosed ? '(Closed)' : ''}
-                  </option>
-                ))
+                <ChevronRight className="w-4 h-4" />
               )}
-            </select>
+            </span>
           </div>
-        </div>
+        </button>
 
-        <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md space-y-4">
-          {/* Header with status badge */}
-          <div className="flex items-center justify-between pb-2 border-b border-[#2A2A2A]">
-            <div>
-              <span className="text-sm sm:text-base font-extrabold text-[#F5F5F5] block">
-                {formatPdfMonth(selectedMonth)}
-              </span>
-              <span className="text-[11px] text-[#777777]">
-                Running balance (Opening + Income - Expense)
-              </span>
-            </div>
-            <div>
-              {currentSummary.isClosed ? (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#f87171] bg-[#201212] border border-[#3d1d1d] px-2.5 py-1 rounded-md">
-                  <Lock className="w-3 h-3" />
-                  <span>Closed & Locked</span>
+        {isMonthlySummaryExpanded && (
+          <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md space-y-4 animate-fadeIn">
+            {/* Header with Month Selector & status badge */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-[#2A2A2A]">
+              <div className="flex items-center gap-2">
+                <select
+                  id="select-summary-month"
+                  value={selectedMonth}
+                  onChange={(e) => {
+                    setSelectedMonth(e.target.value);
+                    setSelectedReportMonth(e.target.value);
+                  }}
+                  disabled={availableMonths.length === 0}
+                  className="bg-[#111111] border border-[#2A2A2A] text-[#F5F5F5] text-xs font-bold px-2.5 py-1.5 rounded-md focus:outline-none focus:border-[#D4AF37] cursor-pointer"
+                >
+                  {availableMonths.length === 0 ? (
+                    <option value="">No months with data</option>
+                  ) : (
+                    availableMonths.map((m) => (
+                      <option key={m} value={m}>
+                        {formatPdfMonth(m)} {allMonthsSummary[m]?.isClosed ? '(Closed)' : ''}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <span className="text-[11px] text-[#777777]">
+                  Running balance (Opening + Income - Expense)
                 </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#4ade80] bg-[#122014] border border-[#1d3d24] px-2.5 py-1 rounded-md">
-                  <Unlock className="w-3 h-3" />
-                  <span>Active (Running)</span>
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* TOP ACTION: DOWNLOAD RESTAURANT ANALYTICS PDF */}
-          <button
-            type="button"
-            id="btn-download-restaurant-analytics-pdf"
-            onClick={handleDownloadRestaurantAnalyticsPdf}
-            disabled={generatingType !== null || availableMonths.length === 0 || !selectedMonth}
-            className={`w-full flex items-center justify-center gap-2 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] px-4.5 py-2.5 rounded-lg font-black text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer min-h-[42px] ${
-              generatingType === 'analytics' ? 'opacity-80' : ''
-            } ${availableMonths.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
-          >
-            {generatingType === 'analytics' ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-[#0A0A0A]" />
-                <span>Generating Analytics PDF...</span>
-              </>
-            ) : (
-              <>
-                <Download className="w-4 h-4 text-[#0A0A0A]" />
-                <span>DOWNLOAD RESTAURANT ANALYTICS PDF</span>
-              </>
-            )}
-          </button>
-
-          {/* Subtle divider before summary boxes */}
-          <div className="border-t border-[#2A2A2A]" />
-
-          {/* 6 Metric Cards for Monthly Summary */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
-            {/* 1. Opening Balance */}
-            <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
-              <span className="text-[10px] text-[#B8B8B8] font-bold block uppercase tracking-wider">
-                Opening Balance
-              </span>
-              <span className="text-sm sm:text-base font-black text-[#F5F5F5] block">
-                {formatCurrency(currentSummary.openingBalance)}
-              </span>
-              <span className="text-[9px] text-[#777777] block">
-                {currentSummary.firstDate}
-              </span>
+              </div>
+              <div>
+                {currentSummary.isClosed ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#f87171] bg-[#201212] border border-[#3d1d1d] px-2.5 py-1 rounded-md">
+                    <Lock className="w-3 h-3" />
+                    <span>Closed & Locked</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#4ade80] bg-[#122014] border border-[#1d3d24] px-2.5 py-1 rounded-md">
+                    <Unlock className="w-3 h-3" />
+                    <span>Active (Running)</span>
+                  </span>
+                )}
+              </div>
             </div>
 
-            {/* 2. Total Income (Billed) */}
-            <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
-              <span className="text-[10px] text-[#4ade80] font-bold block uppercase tracking-wider">
-                Total Income
-              </span>
-              <span className="text-sm sm:text-base font-black text-[#4ade80] block">
-                {formatCurrency(currentSummary.totalIncome)}
-              </span>
-              <span className="text-[9px] text-[#777777] block">
-                Total billed amount
-              </span>
-            </div>
-
-            {/* 3. Received (Renamed from Total Paid) */}
-            <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
-              <span className="text-[10px] text-[#38bdf8] font-bold block uppercase tracking-wider">
-                Received
-              </span>
-              <span className="text-sm sm:text-base font-black text-[#38bdf8] block">
-                {formatCurrency(currentSummary.totalPaid)}
-              </span>
-              <span className="text-[9px] text-[#777777] block">
-                Actual cash received
-              </span>
-            </div>
-
-            {/* 4. Total Balance (Unpaid) */}
-            <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
-              <span className="text-[10px] text-[#fb923c] font-bold block uppercase tracking-wider">
-                Total Balance
-              </span>
-              <span className="text-sm sm:text-base font-black text-[#fb923c] block">
-                {formatCurrency(currentSummary.totalBalance)}
-              </span>
-              <span className="text-[9px] text-[#777777] block">
-                Unpaid / Receivables
-              </span>
-            </div>
-
-            {/* 5. Total Expense */}
-            <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
-              <span className="text-[10px] text-[#f87171] font-bold block uppercase tracking-wider">
-                Total Expense
-              </span>
-              <span className="text-sm sm:text-base font-black text-[#f87171] block">
-                {formatCurrency(currentSummary.totalExpense)}
-              </span>
-              <span className="text-[9px] text-[#777777] block">
-                All categories
-              </span>
-            </div>
-
-            {/* 6. Closing Balance */}
-            <div className="p-3 bg-[#111111] rounded-lg border border-[#D4AF37]/30 space-y-1">
-              <span className="text-[10px] text-[#D4AF37] font-bold block uppercase tracking-wider">
-                Closing Balance
-              </span>
-              <span className="text-sm sm:text-base font-black text-[#F2C94C] block">
-                {formatCurrency(currentSummary.closingBalance)}
-              </span>
-              <span className="text-[9px] text-[#777777] block">
-                Opening + Income - Exp
-              </span>
-            </div>
-          </div>
-
-          {/* Download Monthly PDF Button (After Summary Boxes) */}
-          <div className="pt-1">
+            {/* TOP ACTION: DOWNLOAD RESTAURANT ANALYTICS PDF */}
             <button
               type="button"
-              id="btn-download-summary-monthly-pdf"
-              onClick={() => handleDownloadMonth(selectedMonth)}
-              disabled={generatingType !== null || !selectedMonth}
-              className={`w-full px-4 py-2.5 bg-[#111111] hover:bg-[#1D1D1D] border border-[#2A2A2A] hover:border-[#D4AF37] text-[#F5F5F5] rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px] transition-all ${
-                generatingType === selectedMonth ? 'opacity-80' : ''
-              }`}
+              id="btn-download-restaurant-analytics-pdf"
+              onClick={handleDownloadRestaurantAnalyticsPdf}
+              disabled={generatingType !== null || availableMonths.length === 0 || !selectedMonth}
+              className={`w-full flex items-center justify-center gap-2 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] px-4.5 py-2.5 rounded-lg font-black text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer min-h-[42px] ${
+                generatingType === 'analytics' ? 'opacity-80' : ''
+              } ${availableMonths.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
             >
-              {generatingType === selectedMonth ? (
+              {generatingType === 'analytics' ? (
                 <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D4AF37]" />
-                  <span>Generating...</span>
+                  <Loader2 className="w-4 h-4 animate-spin text-[#0A0A0A]" />
+                  <span>Generating Analytics PDF...</span>
                 </>
               ) : (
                 <>
-                  <FileText className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  <span>Download {formatPdfMonth(selectedMonth)} PDF</span>
+                  <Download className="w-4 h-4 text-[#0A0A0A]" />
+                  <span>DOWNLOAD RESTAURANT ANALYTICS PDF</span>
                 </>
               )}
             </button>
-          </div>
 
-          {/* Consequential Action with clear separation & subtle divider */}
-          <div className="pt-5 sm:pt-6 border-t border-[#2A2A2A]">
-            {!currentSummary.isClosed ? (
-              <button
-                type="button"
-                id="btn-close-month"
-                onClick={() => setClosingPageMonth(selectedMonth)}
-                className="w-full px-4 py-2.5 bg-[#201212] hover:bg-[#3d1d1d] border border-[#f87171]/40 text-[#f87171] rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
-              >
-                <Lock className="w-3.5 h-3.5" />
-                <span>CLOSE BALANCE FOR THIS MONTH</span>
-              </button>
-            ) : (
-              <div className="flex flex-col sm:flex-row items-center gap-2">
-                <button
-                  type="button"
-                  id="btn-view-closing-balance"
-                  onClick={() => setClosingPageMonth(selectedMonth)}
-                  className="w-full sm:flex-1 px-4 py-2.5 bg-[#171717] hover:bg-[#222222] border border-[#D4AF37]/50 text-[#D4AF37] rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>VIEW CLOSING BALANCE</span>
-                </button>
-                <button
-                  type="button"
-                  id="btn-reopen-month"
-                  onClick={() => handleReopenMonth(selectedMonth)}
-                  className="w-full sm:w-auto px-4 py-2.5 bg-[#111111] hover:bg-[#1D1D1D] border border-[#2A2A2A] text-[#B8B8B8] hover:text-[#F5F5F5] rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
-                >
-                  <Unlock className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  <span>Re-open Month</span>
-                </button>
+            {/* Subtle divider before summary boxes */}
+            <div className="border-t border-[#2A2A2A]" />
+
+            {/* 6 Metric Cards for Monthly Summary */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+              {/* 1. Opening Balance */}
+              <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
+                <span className="text-[10px] text-[#B8B8B8] font-bold block uppercase tracking-wider">
+                  Opening Balance
+                </span>
+                <span className="text-sm sm:text-base font-black text-[#F5F5F5] block">
+                  {formatCurrency(currentSummary.openingBalance)}
+                </span>
+                <span className="text-[9px] text-[#777777] block">
+                  {currentSummary.firstDate}
+                </span>
               </div>
-            )}
+
+              {/* 2. Total Income (Billed) */}
+              <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
+                <span className="text-[10px] text-[#4ade80] font-bold block uppercase tracking-wider">
+                  Total Income
+                </span>
+                <span className="text-sm sm:text-base font-black text-[#4ade80] block">
+                  {formatCurrency(currentSummary.totalIncome)}
+                </span>
+                <span className="text-[9px] text-[#777777] block">
+                  Total billed amount
+                </span>
+              </div>
+
+              {/* 3. Received (Renamed from Total Paid) */}
+              <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
+                <span className="text-[10px] text-[#38bdf8] font-bold block uppercase tracking-wider">
+                  Received
+                </span>
+                <span className="text-sm sm:text-base font-black text-[#38bdf8] block">
+                  {formatCurrency(currentSummary.totalPaid)}
+                </span>
+                <span className="text-[9px] text-[#777777] block">
+                  Actual cash received
+                </span>
+              </div>
+
+              {/* 4. Total Balance (Unpaid) */}
+              <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
+                <span className="text-[10px] text-[#fb923c] font-bold block uppercase tracking-wider">
+                  Total Balance
+                </span>
+                <span className="text-sm sm:text-base font-black text-[#fb923c] block">
+                  {formatCurrency(currentSummary.totalBalance)}
+                </span>
+                <span className="text-[9px] text-[#777777] block">
+                  Unpaid / Receivables
+                </span>
+              </div>
+
+              {/* 5. Total Expense */}
+              <div className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1">
+                <span className="text-[10px] text-[#f87171] font-bold block uppercase tracking-wider">
+                  Total Expense
+                </span>
+                <span className="text-sm sm:text-base font-black text-[#f87171] block">
+                  {formatCurrency(currentSummary.totalExpense)}
+                </span>
+                <span className="text-[9px] text-[#777777] block">
+                  All categories
+                </span>
+              </div>
+
+              {/* 6. Closing Balance */}
+              <div className="p-3 bg-[#111111] rounded-lg border border-[#D4AF37]/30 space-y-1">
+                <span className="text-[10px] text-[#D4AF37] font-bold block uppercase tracking-wider">
+                  Closing Balance
+                </span>
+                <span className="text-sm sm:text-base font-black text-[#F2C94C] block">
+                  {formatCurrency(currentSummary.closingBalance)}
+                </span>
+                <span className="text-[9px] text-[#777777] block">
+                  Opening + Income - Exp
+                </span>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       {/* ==================================================
-          SECTION: PARTNER ANALYTICS
+          SECTION: PARTNER ANALYTICS (UNIVERSAL FOR ALL PARTNERS)
           ================================================== */}
       <section id="section-partner-analytics" className="space-y-3">
         <div className="flex items-center justify-between">
@@ -893,40 +878,99 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
           </span>
         </div>
 
-        <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md space-y-3.5">
-          <div className="p-3.5 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="text-xs sm:text-sm font-black text-[#F5F5F5] tracking-wide block">
-                  IRSHAD
-                </span>
-                <span className="text-[11px] text-[#777777]">
-                  Expense Audit & Breakdown for {formatPdfMonth(selectedMonth)}
-                </span>
-              </div>
-              <span className="text-[10px] font-bold text-[#4ade80] bg-[#122014] border border-[#1d3d24] px-2 py-0.5 rounded">
-                Active Partner
-              </span>
+        <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md space-y-4">
+          <div className="p-3.5 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-3.5">
+            {/* Partner Selector */}
+            <div>
+              <label className="block text-[11px] font-bold text-[#D0D0D0] uppercase tracking-wider mb-1.5">
+                PARTNER
+              </label>
+              <select
+                id="select-partner-analytics-name"
+                value={selectedAnalyticsPartner}
+                onChange={(e) => setSelectedAnalyticsPartner(e.target.value)}
+                className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
+              >
+                {analyticsPartners.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
             </div>
 
+            {/* Accounting Month Selector */}
+            <div>
+              <label className="block text-[11px] font-bold text-[#D0D0D0] uppercase tracking-wider mb-1.5">
+                ACCOUNTING MONTH
+              </label>
+              <select
+                id="select-partner-analytics-month"
+                value={selectedPartnerMonth}
+                onChange={(e) => setSelectedPartnerMonth(e.target.value)}
+                disabled={availableMonths.length === 0}
+                className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
+              >
+                {availableMonths.length === 0 ? (
+                  <option value="">No months with data</option>
+                ) : (
+                  availableMonths.map((m) => (
+                    <option key={m} value={m}>
+                      {formatPdfMonth(m)} {allMonthsSummary[m]?.isClosed ? '(Closed)' : ''}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+
+            {/* Report Type Selector */}
+            <div>
+              <label className="block text-[11px] font-bold text-[#D0D0D0] uppercase tracking-wider mb-1.5">
+                REPORT TYPE
+              </label>
+              <select
+                id="select-partner-report-type"
+                value={selectedReportType}
+                onChange={(e) => setSelectedReportType(e.target.value as PartnerReportType)}
+                className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
+              >
+                {reportTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Dynamic Download Button */}
             <button
               type="button"
-              id="btn-download-irshad-analytics-pdf"
-              onClick={() => handleDownloadPartnerAnalyticsPdf('IRSHAD')}
-              disabled={generatingType !== null || availableMonths.length === 0 || !selectedMonth}
+              id="btn-download-partner-analytics-pdf"
+              onClick={() =>
+                handleDownloadPartnerAnalyticsPdf(
+                  selectedAnalyticsPartner,
+                  selectedPartnerMonth || selectedMonth,
+                  selectedReportType
+                )
+              }
+              disabled={
+                generatingType !== null ||
+                availableMonths.length === 0 ||
+                (!selectedPartnerMonth && !selectedMonth)
+              }
               className={`w-full flex items-center justify-center gap-2 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] px-4.5 py-2.5 rounded-lg font-black text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer min-h-[42px] ${
-                generatingType === 'partner-IRSHAD' ? 'opacity-80' : ''
+                generatingType?.startsWith('partner-') ? 'opacity-80' : ''
               } ${availableMonths.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
             >
-              {generatingType === 'partner-IRSHAD' ? (
+              {generatingType?.startsWith('partner-') ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin text-[#0A0A0A]" />
-                  <span>Generating IRSHAD Analytics PDF...</span>
+                  <span>Generating {selectedAnalyticsPartner} Analytics PDF...</span>
                 </>
               ) : (
                 <>
                   <Download className="w-4 h-4 text-[#0A0A0A]" />
-                  <span>DOWNLOAD IRSHAD ANALYTICS PDF</span>
+                  <span>DOWNLOAD {selectedAnalyticsPartner} ANALYTICS PDF</span>
                 </>
               )}
             </button>
@@ -1051,6 +1095,62 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
       </section>
 
       {/* ==================================================
+          SECTION: ACCOUNTING MONTH & CLOSE / RE-OPEN ACTION
+          ================================================== */}
+      <section id="section-close-reopen-action" className="space-y-3">
+        <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] p-3.5 sm:p-4.5 shadow-md space-y-3.5">
+          {/* Accounting Month Selector */}
+          <div>
+            <label className="block text-[11px] font-bold text-[#D0D0D0] uppercase tracking-wider mb-1.5">
+              ACCOUNTING MONTH
+            </label>
+            <select
+              id="select-close-accounting-month"
+              value={selectedCloseMonth}
+              onChange={(e) => setSelectedCloseMonth(e.target.value)}
+              disabled={availableMonths.length === 0}
+              className="w-full px-3 py-2 bg-[#111111] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
+            >
+              {availableMonths.length === 0 ? (
+                <option value="">No months with data</option>
+              ) : (
+                availableMonths.map((m) => (
+                  <option key={m} value={m}>
+                    {formatPdfMonth(m)} {allMonthsSummary[m]?.isClosed ? '(Closed)' : ''}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
+          {/* Action Button: CLOSE BALANCE FOR THIS MONTH or RE-OPEN MONTH */}
+          {!(allMonthsSummary[selectedCloseMonth]?.isClosed) ? (
+            <button
+              type="button"
+              id="btn-close-month-action"
+              onClick={() => setIsConfirmCloseOpen(true)}
+              disabled={isProcessingClose || availableMonths.length === 0 || !selectedCloseMonth}
+              className="w-full px-4 py-3 bg-[#201212] hover:bg-[#3d1d1d] active:bg-[#4a2222] border border-[#f87171]/50 hover:border-[#f87171] text-[#f87171] rounded-lg text-xs sm:text-sm font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer min-h-[46px] transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Lock className="w-4 h-4 text-[#f87171]" />
+              <span>CLOSE BALANCE FOR THIS MONTH</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              id="btn-reopen-month-action"
+              onClick={() => setIsConfirmReopenOpen(true)}
+              disabled={isProcessingReopen || availableMonths.length === 0 || !selectedCloseMonth}
+              className="w-full px-4 py-3 bg-[#111111] hover:bg-[#1D1D1D] active:bg-[#222222] border border-[#2A2A2A] hover:border-[#D4AF37] text-[#D4AF37] hover:text-[#F2C94C] rounded-lg text-xs sm:text-sm font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer min-h-[46px] transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Unlock className="w-4 h-4 text-[#D4AF37]" />
+              <span>RE-OPEN MONTH</span>
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* ==================================================
           SECTION D: SETTINGS & SECURITY (LOCK APP / CHANGE PIN)
           ================================================== */}
       <section id="section-settings-security" className="space-y-3">
@@ -1127,9 +1227,9 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
       />
 
       {/* ==================================================
-          TWO-STEP CONFIRMATION MODAL FOR CLOSING MONTH
+          CONFIRMATION MODAL FOR CLOSING SELECTED MONTH
           ================================================== */}
-      {closeStep !== null && monthToClose && (
+      {isConfirmCloseOpen && selectedCloseMonth && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-3.5 bg-black/85 backdrop-blur-xs animate-fadeIn"
           role="dialog"
@@ -1139,75 +1239,117 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             <div className="flex items-center gap-2.5 text-[#f87171]">
               <AlertTriangle className="w-5 h-5 shrink-0" />
               <h3 className="text-sm font-bold text-[#F5F5F5]">
-                {closeStep === 1 ? 'Close Month Balance?' : 'Final Confirmation'}
+                CLOSE {formatPdfMonth(selectedCloseMonth).toUpperCase()}?
               </h3>
             </div>
 
-            {closeStep === 1 ? (
-              <div className="space-y-2 text-xs text-[#D0D0D0]">
-                <p>
-                  Are you sure you want to close this month's balance for{' '}
-                  <strong className="text-[#F5F5F5] font-bold">
-                    {formatPdfMonth(monthToClose)}
-                  </strong>
-                  ?
-                </p>
-                <div className="p-2.5 bg-[#111111] rounded border border-[#2A2A2A] space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-[#777777]">Closing Balance:</span>
-                    <span className="font-bold text-[#D4AF37]">
-                      {formatCurrency(allMonthsSummary[monthToClose]?.closingBalance || 0)}
-                    </span>
-                  </div>
+            <div className="space-y-2 text-xs text-[#D0D0D0]">
+              <p>
+                Are you sure you want to close accounts for{' '}
+                <strong className="text-[#F5F5F5] font-bold">
+                  {formatPdfMonth(selectedCloseMonth)}
+                </strong>
+                ?
+              </p>
+              <div className="p-2.5 bg-[#111111] rounded border border-[#2A2A2A] space-y-1">
+                <div className="flex justify-between items-center">
+                  <span className="text-[#777777]">Closing Balance:</span>
+                  <span className="font-bold text-[#D4AF37] text-sm">
+                    {formatCurrency(allMonthsSummary[selectedCloseMonth]?.closingBalance || 0)}
+                  </span>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-2 text-xs text-[#D0D0D0]">
-                <p className="text-[#f87171] font-semibold">
-                  Close this month's accounts?
-                </p>
-                <p>
-                  Once officially closed, this month's final closing balance will become the next month's{' '}
-                  <strong className="text-[#F5F5F5] font-bold">opening balance</strong>.
-                </p>
-              </div>
-            )}
+              <p className="text-[11px] text-[#888888] pt-1">
+                Once officially closed, this month's final closing balance will become the next month's{' '}
+                <strong className="text-[#F5F5F5] font-bold">opening balance</strong>.
+              </p>
+            </div>
 
             <div className="flex items-center gap-2 pt-2 border-t border-[#2A2A2A]">
               <button
                 type="button"
-                onClick={handleCancelClose}
+                onClick={() => setIsConfirmCloseOpen(false)}
                 disabled={isProcessingClose}
                 className="flex-1 py-2 px-3 border border-[#2A2A2A] bg-[#111111] hover:bg-[#1D1D1D] text-[#B8B8B8] hover:text-[#F5F5F5] rounded-lg text-xs font-semibold transition-colors cursor-pointer min-h-[40px] text-center"
               >
-                Cancel
+                CANCEL
               </button>
 
-              {closeStep === 1 ? (
-                <button
-                  type="button"
-                  onClick={handleConfirmStep1}
-                  className="flex-1 py-2 px-3 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer min-h-[40px] text-center"
-                >
-                  Continue
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleConfirmStep2}
-                  disabled={isProcessingClose}
-                  className="flex-1 py-2 px-3 bg-[#f87171] hover:bg-[#ef4444] text-[#0A0A0A] rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer min-h-[40px] text-center flex items-center justify-center gap-1"
-                >
-                  {isProcessingClose ? (
-                    <>
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      <span>Closing...</span>
-                    </>
-                  ) : (
-                    <span>Close Month</span>
-                  )}
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={handleConfirmCloseMonth}
+                disabled={isProcessingClose}
+                className="flex-1 py-2 px-3 bg-[#f87171] hover:bg-[#ef4444] text-[#0A0A0A] rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer min-h-[40px] text-center flex items-center justify-center gap-1.5"
+              >
+                {isProcessingClose ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Closing...</span>
+                  </>
+                ) : (
+                  <span>CONFIRM & CLOSE</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================
+          CONFIRMATION MODAL FOR RE-OPENING SELECTED MONTH
+          ================================================== */}
+      {isConfirmReopenOpen && selectedCloseMonth && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3.5 bg-black/85 backdrop-blur-xs animate-fadeIn"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-[#171717] rounded-xl border border-[#2A2A2A] shadow-2xl max-w-sm w-full p-4 sm:p-5 space-y-4">
+            <div className="flex items-center gap-2.5 text-[#D4AF37]">
+              <Unlock className="w-5 h-5 shrink-0" />
+              <h3 className="text-sm font-bold text-[#F5F5F5]">
+                RE-OPEN {formatPdfMonth(selectedCloseMonth).toUpperCase()}?
+              </h3>
+            </div>
+
+            <div className="space-y-2 text-xs text-[#D0D0D0]">
+              <p>
+                Are you sure you want to re-open the accounting records for{' '}
+                <strong className="text-[#F5F5F5] font-bold">
+                  {formatPdfMonth(selectedCloseMonth)}
+                </strong>
+                ?
+              </p>
+              <p className="text-[11px] text-[#888888] pt-1">
+                This will unlock all records for this month so further modifications or settlements can be made.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2 border-t border-[#2A2A2A]">
+              <button
+                type="button"
+                onClick={() => setIsConfirmReopenOpen(false)}
+                disabled={isProcessingReopen}
+                className="flex-1 py-2 px-3 border border-[#2A2A2A] bg-[#111111] hover:bg-[#1D1D1D] text-[#B8B8B8] hover:text-[#F5F5F5] rounded-lg text-xs font-semibold transition-colors cursor-pointer min-h-[40px] text-center"
+              >
+                CANCEL
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmReopenMonth}
+                disabled={isProcessingReopen}
+                className="flex-1 py-2 px-3 bg-[#D4AF37] hover:bg-[#F2C94C] text-[#0A0A0A] rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer min-h-[40px] text-center flex items-center justify-center gap-1.5"
+              >
+                {isProcessingReopen ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Re-opening...</span>
+                  </>
+                ) : (
+                  <span>RE-OPEN MONTH</span>
+                )}
+              </button>
             </div>
           </div>
         </div>

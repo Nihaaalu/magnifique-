@@ -15,6 +15,7 @@ import {
   PaymentStatus,
   ExpenseCategory,
   SettlementType,
+  IrshadWalletEntry,
 } from '../types';
 import {
   calculatePartnerNetBalances,
@@ -456,13 +457,107 @@ export async function deleteIncomeEntry(id: string): Promise<void> {
 // ==========================================
 // 3. EXPENSE ENTRIES
 // ==========================================
+
+/**
+ * Validates the accounting month assignment for an expense:
+ * 1. Must be a valid month start.
+ * 2. Can always belong to the month of its expense_date.
+ * 3. Can belong to the immediately previous month ONLY IF that previous month is still OPEN in account_months.
+ * 4. Cannot be assigned to a CLOSED month or an arbitrary older month.
+ */
+export async function validateExpenseAccountingMonth(
+  expenseDate: string,
+  accountingMonth: string | undefined | null
+): Promise<string> {
+  const expDateStr = expenseDate || new Date().toISOString().substring(0, 10);
+  const expMonthKey = expDateStr.substring(0, 7);
+  const defaultMonthStart = `${expMonthKey}-01`;
+
+  if (!accountingMonth) {
+    return defaultMonthStart;
+  }
+
+  const targetMonthPrefix = accountingMonth.substring(0, 7);
+  const targetMonthStart = `${targetMonthPrefix}-01`;
+
+  // 1. If assigned to the month of expense_date, it is always valid
+  if (targetMonthPrefix === expMonthKey) {
+    return targetMonthStart;
+  }
+
+  // 2. If assigned to immediately previous month, verify that the previous month is still OPEN
+  const [yStr, mStr] = expMonthKey.split('-');
+  let y = parseInt(yStr, 10);
+  let m = parseInt(mStr, 10);
+  if (m === 1) {
+    y -= 1;
+    m = 12;
+  } else {
+    m -= 1;
+  }
+  const prevMonthKey = `${y}-${String(m).padStart(2, '0')}`;
+
+  if (targetMonthPrefix === prevMonthKey) {
+    if (prevMonthKey < '2026-09') {
+      throw new Error(
+        `Cannot assign expense to ${prevMonthKey}. Business accounting starts from September 2026.`
+      );
+    }
+    try {
+      const { data: monthRows } = await supabase
+        .from('account_months')
+        .select('month_start, is_closed');
+
+      const found = (monthRows || []).find((r: any) =>
+        String(r.month_start).startsWith(prevMonthKey)
+      );
+
+      if (found) {
+        if (found.is_closed) {
+          throw new Error(
+            `Cannot assign expense to ${prevMonthKey} because this month is already CLOSED.`
+          );
+        }
+      } else {
+        // If no account_months record, check if there are actual income entries
+        const { count: incCount } = await supabase
+          .from('income_entries')
+          .select('id', { count: 'exact', head: true })
+          .gte('income_date', `${prevMonthKey}-01`)
+          .lte('income_date', `${prevMonthKey}-31`);
+
+        if (!incCount || incCount === 0) {
+          throw new Error(
+            `Cannot assign expense to ${prevMonthKey} because this month does not exist in accounting records.`
+          );
+        }
+      }
+    } catch (e: any) {
+      if (e.message && (e.message.includes('already CLOSED') || e.message.includes('does not exist in accounting records') || e.message.includes('starts from September 2026'))) {
+        throw e;
+      }
+    }
+    return targetMonthStart;
+  }
+
+  // 3. Older or arbitrary month assignments are rejected
+  throw new Error(
+    `Invalid accounting month assignment: ${targetMonthPrefix}. Expenses can only belong to their entry month (${expMonthKey}) or the open previous month (${prevMonthKey}).`
+  );
+}
+
 export async function fetchExpenseEntries(): Promise<ExpenseRecord[]> {
-  const { data, error } = await supabase
+  let data: any[] | null = null;
+  let error: any = null;
+
+  // Attempt to select accounting_month column
+  const resWithAcc = await supabase
     .from('expense_entries')
     .select(
       `
       id,
       expense_date,
+      accounting_month,
       category,
       description,
       amount,
@@ -474,6 +569,33 @@ export async function fetchExpenseEntries(): Promise<ExpenseRecord[]> {
     )
     .order('expense_date', { ascending: false })
     .order('created_at', { ascending: false });
+
+  if (resWithAcc.error && resWithAcc.error.message?.includes('accounting_month')) {
+    // Graceful fallback for older Supabase table schema
+    const fallbackRes = await supabase
+      .from('expense_entries')
+      .select(
+        `
+        id,
+        expense_date,
+        category,
+        description,
+        amount,
+        paid_by,
+        paid_by_partner_id,
+        created_at,
+        updated_at
+      `
+      )
+      .order('expense_date', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    data = fallbackRes.data;
+    error = fallbackRes.error;
+  } else {
+    data = resWithAcc.data;
+    error = resWithAcc.error;
+  }
 
   if (error) {
     console.error('Error fetching expense entries from Supabase:', error);
@@ -502,9 +624,16 @@ export async function fetchExpenseEntries(): Promise<ExpenseRecord[]> {
     const rawPaidBy = String(row.paid_by || '').toUpperCase();
     const isHotel = rawPaidBy === 'HOTEL' || !row.paid_by_partner_id;
 
+    // Determine accounting month
+    const accMonth = row.accounting_month
+      ? (String(row.accounting_month).length === 7 ? `${row.accounting_month}-01` : String(row.accounting_month).substring(0, 10))
+      : (row.expense_date ? `${String(row.expense_date).substring(0, 7)}-01` : undefined);
+
     return {
       id: String(row.id),
       date: row.expense_date,
+      accountingMonth: accMonth,
+      accounting_month: accMonth,
       time: timeStr,
       category: mappedCategory,
       description: row.description || null,
@@ -518,7 +647,7 @@ export async function fetchExpenseEntries(): Promise<ExpenseRecord[]> {
 }
 
 export async function createExpenseEntry(
-  expense: Omit<ExpenseEntryRow, 'id' | 'created_at' | 'updated_at'> & { name?: string }
+  expense: Omit<ExpenseEntryRow, 'id' | 'created_at' | 'updated_at'> & { name?: string; accountingMonth?: string }
 ): Promise<any> {
   const cat = String(expense.category).toLowerCase();
   let dbCategory: 'staff' | 'groceries' | 'other' = 'other';
@@ -529,8 +658,15 @@ export async function createExpenseEntry(
   const isHotel = !expense.paid_by || expense.paid_by.toUpperCase() === 'HOTEL' || !expense.paid_by_partner_id;
   const desc = expense.description !== undefined ? expense.description : (expense.name || null);
 
-  const insertPayload = {
+  // Validate accounting month according to business rules
+  const targetAccMonth = await validateExpenseAccountingMonth(
+    expense.expense_date,
+    expense.accounting_month || expense.accountingMonth
+  );
+
+  const insertPayload: Record<string, any> = {
     expense_date: expense.expense_date,
+    accounting_month: targetAccMonth,
     category: dbCategory,
     description: desc || null,
     amount: Number(expense.amount) || 0,
@@ -538,23 +674,39 @@ export async function createExpenseEntry(
     paid_by_partner_id: isHotel ? null : (Number(expense.paid_by_partner_id) || expense.paid_by_partner_id),
   };
 
-  const { data, error } = await supabase
+  const res = await supabase
     .from('expense_entries')
     .insert(insertPayload)
     .select()
     .single();
 
-  if (error) {
-    console.error('Error creating expense entry in Supabase:', error);
-    throw new Error(`Failed to create expense entry: ${error.message}`);
+  if (res.error) {
+    // If Supabase schema does not have accounting_month column yet, retry insert without it
+    if (res.error.message && res.error.message.includes('accounting_month')) {
+      delete insertPayload.accounting_month;
+      const retryRes = await supabase
+        .from('expense_entries')
+        .insert(insertPayload)
+        .select()
+        .single();
+
+      if (retryRes.error) {
+        console.error('Error creating expense entry in Supabase:', retryRes.error);
+        throw new Error(`Failed to create expense entry: ${retryRes.error.message}`);
+      }
+      return retryRes.data;
+    }
+
+    console.error('Error creating expense entry in Supabase:', res.error);
+    throw new Error(`Failed to create expense entry: ${res.error.message}`);
   }
 
-  return data;
+  return res.data;
 }
 
 export async function updateExpenseEntry(
   id: string,
-  expense: Partial<ExpenseEntryRow> & { name?: string }
+  expense: Partial<ExpenseEntryRow> & { name?: string; accountingMonth?: string }
 ): Promise<any> {
   const updatePayload: Record<string, any> = {
     updated_at: new Date().toISOString(),
@@ -581,19 +733,45 @@ export async function updateExpenseEntry(
     updatePayload.paid_by_partner_id = isHotel ? null : (Number(expense.paid_by_partner_id) || expense.paid_by_partner_id);
   }
 
-  const { data, error } = await supabase
+  if (expense.accounting_month !== undefined || expense.accountingMonth !== undefined) {
+    const accM = expense.accounting_month || expense.accountingMonth;
+    if (accM) {
+      const expDate = expense.expense_date || new Date().toISOString().substring(0, 10);
+      const validatedAcc = await validateExpenseAccountingMonth(expDate, accM);
+      updatePayload.accounting_month = validatedAcc;
+    }
+  }
+
+  const res = await supabase
     .from('expense_entries')
     .update(updatePayload)
     .eq('id', id)
     .select()
     .single();
 
-  if (error) {
-    console.error('Error updating expense entry in Supabase:', error);
-    throw new Error(`Failed to update expense entry: ${error.message}`);
+  if (res.error) {
+    // If Supabase schema does not have accounting_month column, retry without it
+    if (res.error.message && res.error.message.includes('accounting_month')) {
+      delete updatePayload.accounting_month;
+      const retryRes = await supabase
+        .from('expense_entries')
+        .update(updatePayload)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (retryRes.error) {
+        console.error('Error updating expense entry in Supabase:', retryRes.error);
+        throw new Error(`Failed to update expense entry: ${retryRes.error.message}`);
+      }
+      return retryRes.data;
+    }
+
+    console.error('Error updating expense entry in Supabase:', res.error);
+    throw new Error(`Failed to update expense entry: ${res.error.message}`);
   }
 
-  return data;
+  return res.data;
 }
 
 export async function deleteExpenseEntry(id: string): Promise<void> {
@@ -610,19 +788,21 @@ export async function deleteExpenseEntry(id: string): Promise<void> {
 // ==========================================
 export async function fetchPartnerCurrentBalances(): Promise<PartnerCurrentBalance[]> {
   // Always recalculate partner balances dynamically from the raw underlying income entries,
-  // expense entries, settlements, and partners list without reusing stale snapshot views.
-  const [partners, incomeRecords, expenseRecords, settlements] = await Promise.all([
+  // expense entries, settlements, account months status, and partners list without reusing stale snapshot views.
+  const [partners, incomeRecords, expenseRecords, settlements, accountMonths] = await Promise.all([
     fetchPartners(),
     fetchIncomeEntries(),
     fetchExpenseEntries(),
     fetchPartnerSettlements(),
+    fetchAccountMonths(),
   ]);
 
   const netBalances = calculatePartnerNetBalances(
     incomeRecords,
     expenseRecords,
     settlements,
-    partners
+    partners,
+    { accountMonths }
   );
 
   return toPartnerCurrentBalances(netBalances);
@@ -943,7 +1123,7 @@ export async function updateAccountMonthTotals(
   const { error } = await supabase
     .from('account_months')
     .update(updatePayload)
-    .or(`month_start.eq.${dbMonthStart},month_start.like.${monthPrefix}%`);
+    .eq('month_start', dbMonthStart);
 
   if (error) {
     console.warn('Error updating account_months totals in Supabase:', error);
@@ -951,66 +1131,193 @@ export async function updateAccountMonthTotals(
 }
 
 /**
- * Explicitly close a month in account_months
+ * Authoritatively calculates month aggregate totals from live Supabase transaction records
+ * and synchronizes the account_months table so it matches actual transaction data.
+ * Safe operation: never modifies income_entries, expense_entries, partner balances or transaction history.
+ */
+export async function syncAccountMonthWithLiveTransactions(
+  monthKey: string
+): Promise<AccountMonthRow | null> {
+  if (!monthKey || monthKey < '2026-09') return null;
+  const monthPrefix = monthKey.substring(0, 7);
+  const dbMonthStart = `${monthPrefix}-01`;
+
+  // 1. Fetch live income records for this month
+  const { data: incRows, error: incErr } = await supabase
+    .from('income_entries')
+    .select('entry_date, total_amount, amount_received, balance_amount')
+    .gte('entry_date', `${monthPrefix}-01`)
+    .lte('entry_date', `${monthPrefix}-31`);
+
+  if (incErr) {
+    console.warn(`Could not fetch income entries for ${monthKey} sync:`, incErr);
+    return null;
+  }
+
+  // 2. Fetch live expense records for this month
+  let expRows: any[] = [];
+  const expRes = await supabase
+    .from('expense_entries')
+    .select('expense_date, accounting_month, amount');
+
+  if (!expRes.error && expRes.data) {
+    expRows = expRes.data.filter((r) => {
+      const accM = r.accounting_month ? r.accounting_month.substring(0, 7) : '';
+      const expM = r.expense_date ? r.expense_date.substring(0, 7) : '';
+      return accM === monthPrefix || (!accM && expM === monthPrefix);
+    });
+  }
+
+  const totalIncome = (incRows || []).reduce((sum, r) => sum + (Number(r.total_amount) || 0), 0);
+  const totalPaid = (incRows || []).reduce((sum, r) => sum + (Number(r.amount_received) || 0), 0);
+  const totalBalance = (incRows || []).reduce((sum, r) => sum + (Number(r.balance_amount) || 0), 0);
+  const totalExpense = expRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+
+  // 3. Fetch existing account_months row to preserve opening_balance, is_closed, closed_at
+  const { data: existingRows } = await supabase
+    .from('account_months')
+    .select('*');
+
+  const monthRow = (existingRows || []).find((r: any) =>
+    String(r.month_start).startsWith(monthPrefix) || String(r.month_start) === dbMonthStart
+  );
+
+  const openingBalance =
+    monthRow && monthRow.opening_balance !== null && monthRow.opening_balance !== undefined
+      ? Number(monthRow.opening_balance)
+      : 0;
+
+  const closingBalance = openingBalance + totalIncome - totalExpense;
+
+  if (monthRow) {
+    const { data: updated, error: updateErr } = await supabase
+      .from('account_months')
+      .update({
+        total_income: totalIncome,
+        total_paid: totalPaid,
+        total_balance: totalBalance,
+        total_expense: totalExpense,
+        closing_balance: closingBalance,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', monthRow.id)
+      .select()
+      .single();
+
+    if (!updateErr && updated) {
+      return {
+        id: String(updated.id),
+        month_start: String(updated.month_start),
+        opening_balance: Number(updated.opening_balance) || 0,
+        total_income: Number(updated.total_income) || 0,
+        total_paid: Number(updated.total_paid) || 0,
+        total_balance: Number(updated.total_balance) || 0,
+        total_expense: Number(updated.total_expense) || 0,
+        settlement_to_hotel: Number(updated.settlement_to_hotel) || 0,
+        settlement_from_hotel: Number(updated.settlement_from_hotel) || 0,
+        closing_balance: Number(updated.closing_balance) || 0,
+        is_closed: !!updated.is_closed,
+        closed_at: updated.closed_at || null,
+        created_at: updated.created_at,
+        updated_at: updated.updated_at,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Explicitly close a month in account_months via authoritative RPC.
+ * Does NOT perform direct table update fallbacks; RPC is authoritative.
  */
 export async function closeAccountMonthInDb(
   monthKey: string,
-  closingBalance: number
+  _closingBalance?: number
 ): Promise<void> {
   const dbMonthStart = formatMonthStartDb(monthKey);
-  const monthPrefix = monthKey.substring(0, 7);
 
-  // Attempt close_account_month RPC first if permitted
-  try {
-    const { error: rpcError } = await supabase.rpc('close_account_month', {
-      p_month_start: dbMonthStart,
-    });
-    if (!rpcError) {
-      return;
-    }
-  } catch {
-    // Graceful fallback to direct update
-  }
-
-  const updatePayload = {
-    is_closed: true,
-    closing_balance: Number(closingBalance) || 0,
-    closed_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
-
-  const { error } = await supabase
-    .from('account_months')
-    .update(updatePayload)
-    .or(`month_start.eq.${dbMonthStart},month_start.like.${monthPrefix}%`);
+  const { error } = await supabase.rpc('close_account_month', {
+    p_month_start: dbMonthStart,
+  });
 
   if (error) {
-    console.error('Error closing account month in Supabase:', error);
+    console.error('Error calling close_account_month RPC in Supabase:', error);
     throw new Error(`Failed to close month: ${error.message}`);
   }
 }
 
 /**
- * Re-open a month in account_months
+ * Re-open a month in account_months via dedicated SECURITY DEFINER RPC.
+ * This performs a strictly controlled CLOSED -> OPEN transition on account_months.
  */
 export async function reopenAccountMonthInDb(monthKey: string): Promise<void> {
   const dbMonthStart = formatMonthStartDb(monthKey);
-  const monthPrefix = monthKey.substring(0, 7);
 
-  const updatePayload = {
-    is_closed: false,
-    closed_at: null,
-    updated_at: new Date().toISOString(),
-  };
-
-  const { error } = await supabase
-    .from('account_months')
-    .update(updatePayload)
-    .or(`month_start.eq.${dbMonthStart},month_start.like.${monthPrefix}%`);
+  const { data, error } = await supabase.rpc('reopen_account_month', {
+    p_month_start: dbMonthStart,
+  });
 
   if (error) {
-    console.error('Error reopening account month in Supabase:', error);
+    console.error('Error calling reopen_account_month RPC in Supabase:', error);
     throw new Error(`Failed to reopen month: ${error.message}`);
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+
+  if (row && row.is_closed !== false) {
+    throw new Error(`Month ${dbMonthStart} was not reopened.`);
+  }
+}
+
+// ==========================================
+// 7.5. IRSHAD WALLET ENTRIES & SETTLEMENT
+// ==========================================
+
+/**
+ * Fetch all historical closed-month IRSHAD wallet entries from public.irshad_wallet_entries
+ */
+export async function fetchIrshadWalletEntries(): Promise<IrshadWalletEntry[]> {
+  const { data, error } = await supabase
+    .from('irshad_wallet_entries')
+    .select('*')
+    .order('month_start', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching irshad_wallet_entries from Supabase:', error);
+    return [];
+  }
+
+  return (data || []).map((row: any) => ({
+    id: row.id ? String(row.id) : undefined,
+    month_start: String(row.month_start),
+    net_outstanding: Number(row.net_outstanding) || 0,
+    settled_amount: Number(row.settled_amount) || 0,
+    remaining_outstanding:
+      row.remaining_outstanding !== undefined && row.remaining_outstanding !== null
+        ? Number(row.remaining_outstanding)
+        : Math.max(0, Math.abs(Number(row.net_outstanding) || 0) - (Number(row.settled_amount) || 0)),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+}
+
+/**
+ * Settle a specific closed month in IRSHAD Wallet via public.settle_irshad_wallet RPC
+ */
+export async function settleIrshadWallet(
+  monthStart: string,
+  amount: number
+): Promise<void> {
+  const dbMonthStart = formatMonthStartDb(monthStart);
+  const { error } = await supabase.rpc('settle_irshad_wallet', {
+    p_month_start: dbMonthStart,
+    p_amount: amount,
+  });
+
+  if (error) {
+    console.error('Error calling settle_irshad_wallet RPC in Supabase:', error);
+    throw new Error(error.message || 'Failed to settle wallet entry.');
   }
 }
 

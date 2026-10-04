@@ -5,11 +5,13 @@ import {
   normalizePartnerName,
   getEffectivePartners,
   isExpensePaidByPartner,
+  isIncomeAssignedToPartner,
 } from '../utils/partnerBalanceUtils';
+import { getExpenseAccountingMonth } from '../utils/accountBalanceUtils';
 
 // ============================================================================
 // FORMATTING HELPERS (CLEAN UNICODE / ASCII COMPATIBLE FOR JSPDF)
-// Strictly avoids currency symbols (like ₹) that cause '¹' glyph corruption
+// Strictly avoids currency symbols (like ₹) that cause glyph corruption
 // ============================================================================
 
 export function formatIndianCurrency(amount: number): string {
@@ -31,6 +33,8 @@ export function formatIndianNumber(num: number): string {
 // TYPES & INTERFACES
 // ============================================================================
 
+export type PartnerReportType = 'EXPENSE' | 'INCOME' | 'INCOME + EXPENSE';
+
 export interface GroupedExpenseItem {
   name: string;
   amount: number;
@@ -39,12 +43,14 @@ export interface GroupedExpenseItem {
 }
 
 export interface PartnerAnalyticsPdfOptions {
-  partnerName: string; // e.g. 'IRSHAD'
+  partnerName: string; // e.g. 'IRSHAD', 'ANSARI', etc.
+  reportType?: PartnerReportType; // 'EXPENSE' | 'INCOME' | 'INCOME + EXPENSE'
+  accountingMonth?: string; // e.g. '2026-09' or '2026-10'
   dateRangeLabel: string;
   startDate: string;
   endDate: string;
-  incomeRecords?: IncomeRecord[]; // Kept in interface for backward compatibility
-  expenseRecords: ExpenseRecord[];
+  incomeRecords?: IncomeRecord[];
+  expenseRecords?: ExpenseRecord[];
   partners?: Partner[];
 }
 
@@ -53,55 +59,29 @@ export interface PartnerAnalyticsPdfOptions {
 // ============================================================================
 
 /**
- * Normalizes an expense description according to the 3 specific partner grouping rules:
- * 1. VEGETABLES GROUP:
- *    Groups "VEGETABLES", "VEGETABLE", "VEGETABLE (1)", "VEGETABLE(1)", "VEGETABLE (2)", etc.
- *    into "VEGETABLES".
- * 2. CAKE GROUP:
- *    Groups cake-related descriptions ("CAKE", "CAKES", "WELCOME CAKE", "TEACHERS DAY CAKE",
- *    "BIRTHDAY CAKE", "BAASHA CAKE", "EXPRESS 2 CAKE", etc.) into "CAKE".
- * 3. DJ GROUP:
- *    Groups descriptions with "DJ" as a separate word ("DJ", "GET OUT DJ", "ART DJ",
- *    "BAASHA DJ", "DOODS DJ", "EXPRESS DJ", etc.) into "DJ".
- *    Does NOT group words like "DJANGO".
- * 4. ALL OTHER DESCRIPTIONS:
- *    Remain exactly as their own distinct normalized description (case-insensitive, trimmed).
+ * Normalizes an expense description according to partner grouping rules:
+ * 1. VEGETABLES GROUP -> "VEGETABLES"
+ * 2. CAKE GROUP -> "CAKE"
+ * 3. DJ GROUP -> "DJ"
+ * 4. ALL OTHER DESCRIPTIONS -> distinct normalized description
  */
 export function normalizePartnerExpenseDescription(rawDesc: string): string {
   const cleaned = rawDesc.trim().toUpperCase().replace(/\s+/g, ' ');
 
-  // 1. VEGETABLES GROUP:
-  // Matches "VEGETABLE", "VEGETABLES", "VEGETABLE (1)", "VEGETABLE(1)", "VEGETABLE (2)", etc.
   if (/^VEGETABLES?(\s*\(\s*\d+\s*\))?$/i.test(cleaned)) {
     return 'VEGETABLES';
   }
-
-  // 2. CAKE GROUP:
-  // Word-aware matching for "CAKE" or "CAKES"
   if (/\bCAKES?\b/i.test(cleaned)) {
     return 'CAKE';
   }
-
-  // 3. DJ GROUP:
-  // Word-aware matching for "DJ" as a standalone word (avoids "DJANGO", "ADJUST", etc.)
   if (/\bDJ\b/i.test(cleaned)) {
     return 'DJ';
   }
-
-  // 4. All other descriptions remain distinct
   return cleaned;
 }
 
 /**
  * Groups all partner expenses by their normalized description/particulars.
- * - Trims whitespace
- * - Applies the 3 specific normalization rules: VEGETABLES, CAKE, DJ
- * - Case-insensitive grouping for all other items
- * - Does NOT merge distinct items ("CHICKEN GRAVY" vs "CHICKEN" remain separate)
- * - Verifies sum(grouped) === sum(transactions)
- * - Sorts descending by total amount
- * - Strictly NO "OTHER EXPENSES" or catch-all categories. Every unique description
- *   appears as its own individual row.
  */
 export function groupPartnerExpenses(
   expenses: ExpenseRecord[],
@@ -111,7 +91,6 @@ export function groupPartnerExpenses(
 
   for (const exp of expenses) {
     const rawDesc = (exp.description || exp.name || exp.category || 'EXPENSE').trim();
-    // Normalize key using strict partner normalization rules
     const normKey = normalizePartnerExpenseDescription(rawDesc);
 
     const existing = map.get(normKey);
@@ -129,7 +108,6 @@ export function groupPartnerExpenses(
     }
   }
 
-  // Convert map to array with individual share percentages
   const allGrouped = Array.from(map.values()).map((item) => {
     const pct = totalExpense > 0 ? (item.amount / totalExpense) * 100 : 0;
     return {
@@ -140,23 +118,12 @@ export function groupPartnerExpenses(
     };
   });
 
-  // Sort descending by amount (largest expense first)
   allGrouped.sort((a, b) => b.amount - a.amount);
-
-  // Programmatic verification: Sum of all grouped amounts must match totalExpense
-  const totalGroupedRaw = allGrouped.reduce((acc, it) => acc + it.amount, 0);
-  if (Math.abs(totalGroupedRaw - totalExpense) > 0.01) {
-    console.error(
-      `[GroupPartnerExpenses] Discrepancy detected: Grouped sum (${totalGroupedRaw}) != Total expense (${totalExpense})`
-    );
-  }
-
-  // Return ALL individually named grouped descriptions without any omitting or "OTHER" grouping
   return allGrouped;
 }
 
 // ============================================================================
-// PARTNER EXPENSE PDF GENERATOR
+// UNIVERSAL PARTNER ANALYTICS PDF GENERATOR
 // ============================================================================
 
 export async function generatePartnerAnalyticsPDF(
@@ -164,14 +131,18 @@ export async function generatePartnerAnalyticsPDF(
 ): Promise<void> {
   const {
     partnerName,
+    reportType = 'EXPENSE',
+    accountingMonth,
     dateRangeLabel,
     startDate,
     endDate,
-    expenseRecords,
+    incomeRecords = [],
+    expenseRecords = [],
     partners = [],
   } = options;
 
   const normPartner = normalizePartnerName(partnerName);
+  const targetMonth = accountingMonth || startDate.substring(0, 7);
 
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -194,8 +165,8 @@ export async function generatePartnerAnalyticsPDF(
     ', ' +
     now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // Effective partners and ID mapping for robust partner expense matching
-  const effectivePartners = getEffectivePartners(partners, [], expenseRecords);
+  // Effective partners and ID mapping for robust partner transaction matching
+  const effectivePartners = getEffectivePartners(partners, incomeRecords, expenseRecords);
   const idToNameMap = new Map<string, string>();
   effectivePartners.forEach((p) => {
     if (p.id) {
@@ -207,35 +178,46 @@ export async function generatePartnerAnalyticsPDF(
   const targetPartnerId = partnerObj?.id;
 
   // --------------------------------------------------------------------------
-  // 1. FILTER EXPENSES CHRONOLOGICALLY FOR THIS PARTNER & PERIOD
+  // 1. FILTER DATA CHRONOLOGICALLY FOR THIS PARTNER & ACCOUNTING MONTH
   // --------------------------------------------------------------------------
   const partnerExpenses = expenseRecords.filter((r) => {
-    if (!r.date || r.date < startDate || r.date > endDate) return false;
+    const accMonth = getExpenseAccountingMonth(r);
+    const dateMatch = accMonth ? accMonth === targetMonth : (r.date && r.date >= startDate && r.date <= endDate);
+    if (!dateMatch) return false;
     return isExpensePaidByPartner(r, normPartner, targetPartnerId, idToNameMap);
   });
 
-  // Calculate authoritative total
   let totalExpense = 0;
   for (const exp of partnerExpenses) {
     totalExpense += Number(exp.amount) || 0;
   }
 
-  // --------------------------------------------------------------------------
-  // 2. GROUP EXPENSES BY DESCRIPTION
-  // --------------------------------------------------------------------------
-  const groupedExpenses = groupPartnerExpenses(partnerExpenses, totalExpense);
+  const partnerIncomes = incomeRecords.filter((r) => {
+    if (!r.date || r.date < startDate || r.date > endDate) return false;
+    return isIncomeAssignedToPartner(r, normPartner, targetPartnerId, idToNameMap);
+  });
 
-  // Verification check: ensure grouped amounts sum up to totalExpense
-  const totalGroupedAmount = groupedExpenses.reduce((sum, item) => sum + item.amount, 0);
-  if (Math.abs(totalGroupedAmount - totalExpense) > 0.01) {
-    throw new Error(
-      `Integrity check failed: Grouped sum (Rs. ${totalGroupedAmount}) does not match total expense (Rs. ${totalExpense})`
-    );
+  let totalIncomeBilled = 0;
+  let totalIncomeReceived = 0;
+  let totalIncomeBalance = 0;
+  for (const inc of partnerIncomes) {
+    totalIncomeBilled += Number(inc.total) || 0;
+    totalIncomeReceived += Number(inc.amountPaid) || 0;
+    totalIncomeBalance += Number(inc.balance) || 0;
   }
 
+  const groupedExpenses = groupPartnerExpenses(partnerExpenses, totalExpense);
+
   // --------------------------------------------------------------------------
-  // 3. HEADER DRAWING FUNCTION (Multi-page safe with duplicate prevention)
+  // 2. HEADER DRAWING FUNCTION (Multi-page safe)
   // --------------------------------------------------------------------------
+  let reportTitle = `${normPartner} EXPENSE REPORT`;
+  if (reportType === 'INCOME') {
+    reportTitle = `${normPartner} INCOME REPORT`;
+  } else if (reportType === 'INCOME + EXPENSE') {
+    reportTitle = `${normPartner} INCOME & EXPENSE REPORT`;
+  }
+
   const drawnHeaders = new Set<number>();
   const drawPageHeader = (pageNumber: number) => {
     if (drawnHeaders.has(pageNumber)) return;
@@ -243,7 +225,6 @@ export async function generatePartnerAnalyticsPDF(
     doc.setPage(pageNumber);
 
     if (pageNumber === 1) {
-      // Page 1 Header Banner (24mm)
       doc.setFillColor(15, 15, 15);
       doc.rect(0, 0, pageWidth, 24, 'F');
       doc.setFillColor(212, 175, 55);
@@ -257,14 +238,13 @@ export async function generatePartnerAnalyticsPDF(
       doc.setFontSize(8);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(210, 210, 210);
-      doc.text(`${normPartner} EXPENSE REPORT`, margin, 18);
+      doc.text(reportTitle, margin, 18);
 
       doc.setFontSize(7.5);
       doc.setTextColor(170, 170, 170);
       doc.text(`Generated: ${generatedTimeStr}`, pageWidth - margin, 11.5, { align: 'right' });
       doc.text(`Period: ${dateRangeLabel}`, pageWidth - margin, 18, { align: 'right' });
     } else {
-      // Subsequent Pages Header Banner (18mm)
       doc.setFillColor(15, 15, 15);
       doc.rect(0, 0, pageWidth, 18, 'F');
       doc.setFillColor(212, 175, 55);
@@ -278,7 +258,7 @@ export async function generatePartnerAnalyticsPDF(
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7.5);
       doc.setTextColor(200, 200, 200);
-      doc.text(`- ${normPartner} EXPENSE REPORT`, margin + 42, 10);
+      doc.text(`- ${reportTitle}`, margin + 42, 10);
 
       doc.setFontSize(7.5);
       doc.setTextColor(170, 170, 170);
@@ -286,141 +266,513 @@ export async function generatePartnerAnalyticsPDF(
     }
   };
 
-  // Draw Page 1 header initially
   drawPageHeader(1);
-
-  // Content begins safely below Page 1 gold divider line (ends at 24.4mm)
   let curY = 28.5;
 
   // ==========================================================================
-  // SECTION: SUMMARY CARD (TOTAL IRSHAD EXPENSE)
+  // CASE 1: EXPENSE REPORT ONLY
   // ==========================================================================
-  const summaryCardH = 17;
-  doc.setFillColor(255, 241, 242); // Rose-50
-  doc.setDrawColor(254, 205, 211); // Rose-200
-  doc.setLineWidth(0.3);
-  doc.roundedRect(margin, curY, contentWidth, summaryCardH, 2, 2, 'FD');
+  if (reportType === 'EXPENSE') {
+    // Summary Card
+    const summaryCardH = 17;
+    doc.setFillColor(255, 241, 242);
+    doc.setDrawColor(254, 205, 211);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(margin, curY, contentWidth, summaryCardH, 2, 2, 'FD');
 
-  // Accent bar on left
-  doc.setFillColor(244, 63, 94); // Rose-500
-  doc.rect(margin, curY, 2.5, summaryCardH, 'F');
+    doc.setFillColor(244, 63, 94);
+    doc.rect(margin, curY, 2.5, summaryCardH, 'F');
 
-  // Card Title
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
-  doc.setTextColor(159, 18, 57);
-  doc.text(`TOTAL ${normPartner} EXPENSE`, margin + 6, curY + 5.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(159, 18, 57);
+    doc.text(`TOTAL ${normPartner} EXPENSE`, margin + 6, curY + 5.5);
 
-  // Subtitle
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Total expenses paid by ${normPartner}`, margin + 6, curY + 12.0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Total expenses paid by ${normPartner}`, margin + 6, curY + 12.0);
 
-  // Value
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.setTextColor(225, 29, 72);
-  doc.text(
-    `Rs. ${formatIndianNumber(totalExpense)}`,
-    pageWidth - margin - 6,
-    curY + 10.5,
-    { align: 'right' }
-  );
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(225, 29, 72);
+    doc.text(
+      `Rs. ${formatIndianNumber(totalExpense)}`,
+      pageWidth - margin - 6,
+      curY + 10.5,
+      { align: 'right' }
+    );
 
-  curY += summaryCardH + 5.5;
+    curY += summaryCardH + 5.5;
 
-  // ==========================================================================
-  // SECTION: GROUPED EXPENSES TABLE
-  // ==========================================================================
-  // Section Title
-  doc.setFillColor(244, 63, 94); // Rose bullet
-  doc.circle(margin + 1.5, curY + 1.5, 1.5, 'F');
+    // Table Header Info
+    doc.setFillColor(244, 63, 94);
+    doc.circle(margin + 1.5, curY + 1.5, 1.5, 'F');
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(15, 23, 42);
-  doc.text(`EXPENSE BREAKDOWN BY PARTICULARS / DESCRIPTION`, margin + 5, curY + 2.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`EXPENSE BREAKDOWN BY PARTICULARS / DESCRIPTION`, margin + 5, curY + 2.5);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(
-    `${groupedExpenses.length} Unique Categories • Total: ${formatIndianCurrency(totalExpense)}`,
-    pageWidth - margin,
-    curY + 2.5,
-    { align: 'right' }
-  );
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `${groupedExpenses.length} Unique Categories • Total: ${formatIndianCurrency(totalExpense)}`,
+      pageWidth - margin,
+      curY + 2.5,
+      { align: 'right' }
+    );
 
-  curY += 5.0;
+    curY += 5.0;
 
-  // Prepare table rows
-  const tableRows =
-    groupedExpenses.length > 0
-      ? groupedExpenses.map((item, idx) => [
-          String(idx + 1),
-          item.name,
-          formatIndianCurrency(item.amount),
-          `${item.percentage.toFixed(1)}%`,
-        ])
-      : [
-          [
-            '-',
-            `No expenses recorded for ${normPartner} in this period`,
-            'Rs. 0',
-            '0.0%',
-          ],
-        ];
+    const tableRows =
+      groupedExpenses.length > 0
+        ? groupedExpenses.map((item, idx) => [
+            String(idx + 1),
+            item.name,
+            formatIndianCurrency(item.amount),
+            `${item.percentage.toFixed(1)}%`,
+          ])
+        : [
+            [
+              '-',
+              `No expenses recorded for ${normPartner} in this period`,
+              'Rs. 0',
+              '0.0%',
+            ],
+          ];
 
-  autoTable(doc, {
-    startY: curY,
-    margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
-    showHead: 'everyPage',
-    showFoot: 'lastPage',
-    head: [['#', 'EXPENSE ITEM', 'TOTAL AMOUNT (INR)', 'SHARE (%)']],
-    body: tableRows,
-    foot: [
-      [
-        '',
-        `TOTAL ${normPartner} EXPENSE`,
-        formatIndianCurrency(totalExpense),
-        '100.0%',
+    autoTable(doc, {
+      startY: curY,
+      margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
+      showHead: 'everyPage',
+      showFoot: 'lastPage',
+      head: [['#', 'EXPENSE ITEM', 'TOTAL AMOUNT (INR)', 'SHARE (%)']],
+      body: tableRows,
+      foot: [
+        [
+          '',
+          `TOTAL ${normPartner} EXPENSE`,
+          formatIndianCurrency(totalExpense),
+          '100.0%',
+        ],
       ],
-    ],
-    theme: 'grid',
-    styles: {
-      font: 'helvetica',
-      fontSize: 7.2,
-      cellPadding: { top: 1.4, bottom: 1.4, left: 2.0, right: 2.0 },
-      minCellHeight: 5.2,
-      lineColor: [226, 232, 240],
-      lineWidth: 0.2,
-      textColor: [30, 41, 59],
-    },
-    headStyles: {
-      fillColor: [26, 26, 26],
-      textColor: [242, 201, 76],
-      fontStyle: 'bold',
-      fontSize: 7.5,
-      cellPadding: { top: 1.6, bottom: 1.6, left: 2.0, right: 2.0 },
-    },
-    footStyles: {
-      fillColor: [241, 245, 249],
-      textColor: [15, 23, 42],
-      fontStyle: 'bold',
-      fontSize: 7.5,
-      cellPadding: { top: 1.6, bottom: 1.6, left: 2.0, right: 2.0 },
-    },
-    columnStyles: {
-      0: { cellWidth: 12, halign: 'center' },
-      1: { cellWidth: 'auto', fontStyle: 'bold' },
-      2: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
-      3: { cellWidth: 28, halign: 'right', fontStyle: 'bold' },
-    },
-    didDrawPage: (data) => {
-      drawPageHeader(data.pageNumber);
-    },
-  });
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 7.2,
+        cellPadding: { top: 1.4, bottom: 1.4, left: 2.0, right: 2.0 },
+        minCellHeight: 5.2,
+        lineColor: [226, 232, 240],
+        lineWidth: 0.2,
+        textColor: [30, 41, 59],
+      },
+      headStyles: {
+        fillColor: [26, 26, 26],
+        textColor: [242, 201, 76],
+        fontStyle: 'bold',
+        fontSize: 7.5,
+        cellPadding: { top: 1.6, bottom: 1.6, left: 2.0, right: 2.0 },
+      },
+      footStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: 7.5,
+        cellPadding: { top: 1.6, bottom: 1.6, left: 2.0, right: 2.0 },
+      },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'center' },
+        1: { cellWidth: 'auto', fontStyle: 'bold' },
+        2: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
+        3: { cellWidth: 28, halign: 'right', fontStyle: 'bold' },
+      },
+      didDrawPage: (data) => {
+        drawPageHeader(data.pageNumber);
+      },
+    });
+  }
+
+  // ==========================================================================
+  // CASE 2: INCOME REPORT ONLY
+  // ==========================================================================
+  else if (reportType === 'INCOME') {
+    const summaryCardH = 17;
+    doc.setFillColor(240, 253, 244); // Emerald-50
+    doc.setDrawColor(187, 247, 208); // Emerald-200
+    doc.setLineWidth(0.3);
+    doc.roundedRect(margin, curY, contentWidth, summaryCardH, 2, 2, 'FD');
+
+    doc.setFillColor(34, 197, 94); // Emerald-500
+    doc.rect(margin, curY, 2.5, summaryCardH, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(20, 83, 45);
+    doc.text(`TOTAL ${normPartner} INCOME BALANCE ASSIGNED`, margin + 6, curY + 5.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `Billed: ${formatIndianCurrency(totalIncomeBilled)}  |  Received: ${formatIndianCurrency(totalIncomeReceived)}`,
+      margin + 6,
+      curY + 12.0
+    );
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(22, 101, 52);
+    doc.text(
+      `Rs. ${formatIndianNumber(totalIncomeBalance)}`,
+      pageWidth - margin - 6,
+      curY + 10.5,
+      { align: 'right' }
+    );
+
+    curY += summaryCardH + 5.5;
+
+    // Section Header
+    doc.setFillColor(34, 197, 94);
+    doc.circle(margin + 1.5, curY + 1.5, 1.5, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`INCOME RECORDS ASSIGNED TO ${normPartner}`, margin + 5, curY + 2.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `${partnerIncomes.length} Entries • Total Balance: ${formatIndianCurrency(totalIncomeBalance)}`,
+      pageWidth - margin,
+      curY + 2.5,
+      { align: 'right' }
+    );
+
+    curY += 5.0;
+
+    const incomeRows =
+      partnerIncomes.length > 0
+        ? partnerIncomes.map((item, idx) => {
+            const particulars = item.travels || (item.byWho ? `By ${item.byWho}` : '') || item.incomeType || 'Direct';
+            return [
+              String(idx + 1),
+              item.date || '',
+              particulars,
+              formatIndianCurrency(Number(item.total) || 0),
+              formatIndianCurrency(Number(item.amountPaid) || 0),
+              formatIndianCurrency(Number(item.balance) || 0),
+            ];
+          })
+        : [
+            [
+              '-',
+              '-',
+              `No income records assigned to ${normPartner} in this period`,
+              'Rs. 0',
+              'Rs. 0',
+              'Rs. 0',
+            ],
+          ];
+
+    autoTable(doc, {
+      startY: curY,
+      margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
+      showHead: 'everyPage',
+      showFoot: 'lastPage',
+      head: [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED (INR)', 'RECEIVED (INR)', 'BALANCE ASSIGNED (INR)']],
+      body: incomeRows,
+      foot: [
+        [
+          '',
+          '',
+          `TOTAL ${normPartner} INCOME`,
+          formatIndianCurrency(totalIncomeBilled),
+          formatIndianCurrency(totalIncomeReceived),
+          formatIndianCurrency(totalIncomeBalance),
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 7.0,
+        cellPadding: { top: 1.4, bottom: 1.4, left: 1.8, right: 1.8 },
+        minCellHeight: 5.2,
+        lineColor: [226, 232, 240],
+        lineWidth: 0.2,
+        textColor: [30, 41, 59],
+      },
+      headStyles: {
+        fillColor: [26, 26, 26],
+        textColor: [242, 201, 76],
+        fontStyle: 'bold',
+        fontSize: 7.2,
+        cellPadding: { top: 1.6, bottom: 1.6, left: 1.8, right: 1.8 },
+      },
+      footStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: 7.2,
+        cellPadding: { top: 1.6, bottom: 1.6, left: 1.8, right: 1.8 },
+      },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 22 },
+        2: { cellWidth: 'auto', fontStyle: 'bold' },
+        3: { cellWidth: 28, halign: 'right' },
+        4: { cellWidth: 28, halign: 'right' },
+        5: { cellWidth: 36, halign: 'right', fontStyle: 'bold' },
+      },
+      didDrawPage: (data) => {
+        drawPageHeader(data.pageNumber);
+      },
+    });
+  }
+
+  // ==========================================================================
+  // CASE 3: INCOME + EXPENSE COMBINED REPORT
+  // ==========================================================================
+  else {
+    // 3 Summary Cards in row
+    const cardW = (contentWidth - 6) / 3;
+    const summaryCardH = 17;
+
+    // Card 1: Income Balance
+    doc.setFillColor(240, 253, 244);
+    doc.setDrawColor(187, 247, 208);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(margin, curY, cardW, summaryCardH, 2, 2, 'FD');
+    doc.setFillColor(34, 197, 94);
+    doc.rect(margin, curY, 2.0, summaryCardH, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(20, 83, 45);
+    doc.text('INCOME BALANCE ASSIGNED', margin + 4.5, curY + 4.8);
+    doc.setFontSize(10.5);
+    doc.setTextColor(22, 101, 52);
+    doc.text(`Rs. ${formatIndianNumber(totalIncomeBalance)}`, margin + 4.5, curY + 11.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`${partnerIncomes.length} income entries`, margin + 4.5, curY + 15.0);
+
+    // Card 2: Total Expense
+    const card2X = margin + cardW + 3;
+    doc.setFillColor(255, 241, 242);
+    doc.setDrawColor(254, 205, 211);
+    doc.roundedRect(card2X, curY, cardW, summaryCardH, 2, 2, 'FD');
+    doc.setFillColor(244, 63, 94);
+    doc.rect(card2X, curY, 2.0, summaryCardH, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(159, 18, 57);
+    doc.text('TOTAL EXPENSES PAID', card2X + 4.5, curY + 4.8);
+    doc.setFontSize(10.5);
+    doc.setTextColor(225, 29, 72);
+    doc.text(`Rs. ${formatIndianNumber(totalExpense)}`, card2X + 4.5, curY + 11.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`${partnerExpenses.length} expense entries`, card2X + 4.5, curY + 15.0);
+
+    // Card 3: Net Operational Balance
+    const card3X = card2X + cardW + 3;
+    const netDifference = totalIncomeBalance - totalExpense;
+    doc.setFillColor(254, 243, 199);
+    doc.setDrawColor(253, 230, 138);
+    doc.roundedRect(card3X, curY, cardW, summaryCardH, 2, 2, 'FD');
+    doc.setFillColor(212, 175, 55);
+    doc.rect(card3X, curY, 2.0, summaryCardH, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(146, 64, 14);
+    doc.text('NET OPERATIONAL BALANCE', card3X + 4.5, curY + 4.8);
+    doc.setFontSize(10.5);
+    doc.setTextColor(180, 83, 9);
+    doc.text(`Rs. ${formatIndianNumber(netDifference)}`, card3X + 4.5, curY + 11.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(netDifference >= 0 ? `${normPartner} to Hotel` : `Hotel to ${normPartner}`, card3X + 4.5, curY + 15.0);
+
+    curY += summaryCardH + 5.5;
+
+    // SECTION A: INCOME BREAKDOWN
+    doc.setFillColor(34, 197, 94);
+    doc.circle(margin + 1.5, curY + 1.5, 1.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`1. INCOME ASSIGNED BREAKDOWN`, margin + 5, curY + 2.5);
+
+    curY += 4.5;
+
+    const incomeRows =
+      partnerIncomes.length > 0
+        ? partnerIncomes.map((item, idx) => {
+            const particulars = item.travels || (item.byWho ? `By ${item.byWho}` : '') || item.incomeType || 'Direct';
+            return [
+              String(idx + 1),
+              item.date || '',
+              particulars,
+              formatIndianCurrency(Number(item.total) || 0),
+              formatIndianCurrency(Number(item.amountPaid) || 0),
+              formatIndianCurrency(Number(item.balance) || 0),
+            ];
+          })
+        : [
+            [
+              '-',
+              '-',
+              `No income records assigned to ${normPartner} in this period`,
+              'Rs. 0',
+              'Rs. 0',
+              'Rs. 0',
+            ],
+          ];
+
+    autoTable(doc, {
+      startY: curY,
+      margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
+      showHead: 'everyPage',
+      showFoot: 'lastPage',
+      head: [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED', 'RECEIVED', 'BALANCE ASSIGNED']],
+      body: incomeRows,
+      foot: [
+        [
+          '',
+          '',
+          `TOTAL INCOME ASSIGNED`,
+          formatIndianCurrency(totalIncomeBilled),
+          formatIndianCurrency(totalIncomeReceived),
+          formatIndianCurrency(totalIncomeBalance),
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 6.8,
+        cellPadding: { top: 1.2, bottom: 1.2, left: 1.6, right: 1.6 },
+        minCellHeight: 4.8,
+        lineColor: [226, 232, 240],
+        lineWidth: 0.2,
+        textColor: [30, 41, 59],
+      },
+      headStyles: {
+        fillColor: [26, 26, 26],
+        textColor: [242, 201, 76],
+        fontStyle: 'bold',
+        fontSize: 7.0,
+      },
+      footStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: 7.0,
+      },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 22 },
+        2: { cellWidth: 'auto', fontStyle: 'bold' },
+        3: { cellWidth: 26, halign: 'right' },
+        4: { cellWidth: 26, halign: 'right' },
+        5: { cellWidth: 32, halign: 'right', fontStyle: 'bold' },
+      },
+      didDrawPage: (data) => {
+        drawPageHeader(data.pageNumber);
+      },
+    });
+
+    // Get table bottom Y
+    const lastTable = (doc as any).lastAutoTable;
+    let nextY = lastTable ? lastTable.finalY + 6.0 : curY + 20;
+
+    // Check if new page is needed for Section 2
+    if (nextY > pageHeight - 40) {
+      doc.addPage();
+      drawPageHeader(doc.getNumberOfPages());
+      nextY = 28.5;
+    }
+
+    // SECTION B: EXPENSE BREAKDOWN
+    doc.setFillColor(244, 63, 94);
+    doc.circle(margin + 1.5, nextY + 1.5, 1.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`2. EXPENSE BREAKDOWN BY PARTICULARS`, margin + 5, nextY + 2.5);
+
+    nextY += 4.5;
+
+    const expenseTableRows =
+      groupedExpenses.length > 0
+        ? groupedExpenses.map((item, idx) => [
+            String(idx + 1),
+            item.name,
+            formatIndianCurrency(item.amount),
+            `${item.percentage.toFixed(1)}%`,
+          ])
+        : [
+            [
+              '-',
+              `No expenses recorded for ${normPartner} in this period`,
+              'Rs. 0',
+              '0.0%',
+            ],
+          ];
+
+    autoTable(doc, {
+      startY: nextY,
+      margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
+      showHead: 'everyPage',
+      showFoot: 'lastPage',
+      head: [['#', 'EXPENSE ITEM', 'TOTAL AMOUNT (INR)', 'SHARE (%)']],
+      body: expenseTableRows,
+      foot: [
+        [
+          '',
+          `TOTAL ${normPartner} EXPENSES`,
+          formatIndianCurrency(totalExpense),
+          '100.0%',
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 6.8,
+        cellPadding: { top: 1.2, bottom: 1.2, left: 1.8, right: 1.8 },
+        minCellHeight: 4.8,
+        lineColor: [226, 232, 240],
+        lineWidth: 0.2,
+        textColor: [30, 41, 59],
+      },
+      headStyles: {
+        fillColor: [26, 26, 26],
+        textColor: [242, 201, 76],
+        fontStyle: 'bold',
+        fontSize: 7.0,
+      },
+      footStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: 7.0,
+      },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'center' },
+        1: { cellWidth: 'auto', fontStyle: 'bold' },
+        2: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
+        3: { cellWidth: 28, halign: 'right', fontStyle: 'bold' },
+      },
+      didDrawPage: (data) => {
+        drawPageHeader(data.pageNumber);
+      },
+    });
+  }
 
   // ==========================================================================
   // FOOTER (ON EVERY PAGE)
@@ -436,7 +788,7 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(7);
     doc.setTextColor(148, 163, 184);
     doc.text(
-      `MAGNIFIQUE 2.0 - ${normPartner} EXPENSE REPORT`,
+      `MAGNIFIQUE 2.0 - ${reportTitle}`,
       margin,
       pageHeight - 6.5
     );
@@ -454,10 +806,11 @@ export async function generatePartnerAnalyticsPDF(
   const cleanPartner = normPartner.replace(/[^a-zA-Z0-9_-]/g, '_');
   const safeStart = startDate ? startDate.replace(/[^0-9]/g, '') : '';
   const safeEnd = endDate ? endDate.replace(/[^0-9]/g, '') : '';
+  const typeSuffix = reportType === 'INCOME' ? 'Income' : reportType === 'INCOME + EXPENSE' ? 'Income_Expense' : 'Expense';
   const fileName =
     safeStart && safeEnd
-      ? `Magnifique_${cleanPartner}_Expense_Report_${safeStart}_to_${safeEnd}.pdf`
-      : `Magnifique_${cleanPartner}_Expense_Report.pdf`;
+      ? `Magnifique_${cleanPartner}_${typeSuffix}_Report_${safeStart}_to_${safeEnd}.pdf`
+      : `Magnifique_${cleanPartner}_${typeSuffix}_Report.pdf`;
 
   // Cross-platform PDF download (Desktop, iOS Safari, Android Chrome)
   try {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Partner,
   PartnerCurrentBalance,
@@ -7,12 +7,24 @@ import {
   SettlementType,
   IncomeRecord,
   ExpenseRecord,
+  AccountMonthRow,
+  IrshadWalletEntry,
 } from '../types';
 import {
   formatCurrency,
   getTodayDateString,
+  getCurrentMonthString,
   formatDateDisplay,
 } from '../utils/formatters';
+import {
+  getAllAvailableAccountMonths,
+  BUSINESS_START_ACCOUNTING_MONTH,
+} from '../utils/accountBalanceUtils';
+import {
+  calculatePartnerBalancesForMonth,
+  normalizePartnerName,
+  getSettlementMonthKey,
+} from '../utils/partnerBalanceUtils';
 import {
   CheckCircle2,
   X,
@@ -20,15 +32,22 @@ import {
   Trash2,
   AlertTriangle,
   Clock,
+  Wallet,
+  ChevronDown,
+  ChevronRight,
+  ChevronLeft,
 } from 'lucide-react';
-import { IrshadDetailsPage } from './IrshadDetailsPage';
+import { formatPdfMonth } from '../services/pdfReportGenerator';
+import { WalletPage } from './WalletPage';
 
 interface PartnerTabProps {
   partners: Partner[];
-  partnerBalances: PartnerCurrentBalance[];
+  partnerBalances?: PartnerCurrentBalance[];
   partnerSettlements: (PartnerSettlement | PartnerSettlementRow)[];
   incomeRecords?: IncomeRecord[];
   expenseRecords?: ExpenseRecord[];
+  accountMonths?: AccountMonthRow[];
+  walletEntries?: IrshadWalletEntry[];
   onAddSettlement: (
     settlement: Omit<PartnerSettlementRow, 'id' | 'created_at'>
   ) => Promise<void>;
@@ -37,6 +56,7 @@ interface PartnerTabProps {
     settlement: Partial<Omit<PartnerSettlementRow, 'id' | 'created_at'>>
   ) => Promise<void>;
   onDeleteSettlement: (id: string) => Promise<void>;
+  onSettleWallet?: (monthStart: string, amount: number) => Promise<void>;
   isLoading?: boolean;
 }
 
@@ -59,23 +79,71 @@ interface DeleteModalState {
 
 export const PartnerTab: React.FC<PartnerTabProps> = ({
   partners,
-  partnerBalances,
   partnerSettlements,
   incomeRecords = [],
   expenseRecords = [],
+  accountMonths = [],
+  walletEntries = [],
   onAddSettlement,
   onUpdateSettlement,
   onDeleteSettlement,
+  onSettleWallet = async () => {},
   isLoading,
 }) => {
   const [activeModal, setActiveModal] = useState<SettlementModalState | null>(null);
-  const [showIrshadDetails, setShowIrshadDetails] = useState<boolean>(false);
+  const [showWallet, setShowWallet] = useState<boolean>(false);
+
+  // Available accounting months (ordered chronologically)
+  const availableMonths = useMemo(() => {
+    return getAllAvailableAccountMonths(
+      incomeRecords,
+      expenseRecords,
+      accountMonths,
+      partnerSettlements
+    );
+  }, [incomeRecords, expenseRecords, accountMonths, partnerSettlements]);
+
+  // Unique sorted accounting months starting at BUSINESS_START_ACCOUNTING_MONTH
+  const sortedMonths = useMemo(() => {
+    const set = new Set<string>();
+    set.add(BUSINESS_START_ACCOUNTING_MONTH);
+    const cur = getCurrentMonthString();
+    if (cur >= BUSINESS_START_ACCOUNTING_MONTH) {
+      set.add(cur);
+    }
+    availableMonths.forEach((m) => {
+      if (m >= BUSINESS_START_ACCOUNTING_MONTH) {
+        set.add(m);
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [availableMonths]);
+
+  // Selected Accounting Month (Default: current active accounting month)
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const cur = getCurrentMonthString();
+    return cur >= BUSINESS_START_ACCOUNTING_MONTH ? cur : BUSINESS_START_ACCOUNTING_MONTH;
+  });
+
+  const currentIndex = sortedMonths.indexOf(selectedMonth);
+  const hasPrevMonth = currentIndex > 0;
+  const hasNextMonth = currentIndex >= 0 && currentIndex < sortedMonths.length - 1;
+
+  const handlePrevMonth = () => {
+    if (hasPrevMonth) {
+      setSelectedMonth(sortedMonths[currentIndex - 1]);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (hasNextMonth) {
+      setSelectedMonth(sortedMonths[currentIndex + 1]);
+    }
+  };
 
   const [settlementAmount, setSettlementAmount] = useState<string>('');
   const [settlementDate, setSettlementDate] = useState<string>(getTodayDateString());
-  const [settlementMonth, setSettlementMonth] = useState<string>(() =>
-    getTodayDateString().substring(0, 7)
-  );
+  const [settlementMonth, setSettlementMonth] = useState<string>(selectedMonth);
   const [settlementType, setSettlementType] = useState<SettlementType>('balance_to_hotel');
   const [settlementNotes, setSettlementNotes] = useState<string>('');
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
@@ -85,55 +153,88 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
   // Delete confirmation modal state
   const [deleteModal, setDeleteModal] = useState<DeleteModalState | null>(null);
 
-  const getBalancesForPartner = (partnerId: string, partnerName: string) => {
-    const found = partnerBalances.find(
-      (b) =>
-        b.partner_id === partnerId ||
-        b.name?.toLowerCase() === partnerName.toLowerCase()
+  // Expanded/collapsed state for each partner's settlement history in the selected month
+  const [expandedPartnerHistory, setExpandedPartnerHistory] = useState<Record<string, boolean>>({});
+
+  const togglePartnerHistory = (partnerId: string) => {
+    setExpandedPartnerHistory((prev) => ({
+      ...prev,
+      [partnerId]: !prev[partnerId],
+    }));
+  };
+
+  // Authoritative, month-isolated partner balances for the currently selected accounting month
+  const currentMonthPartnerBalances = useMemo(() => {
+    return calculatePartnerBalancesForMonth(
+      selectedMonth,
+      incomeRecords,
+      expenseRecords,
+      partnerSettlements as PartnerSettlement[],
+      partners,
+      accountMonths
     );
-    const netBal = found ? Number(found.net_balance) || 0 : 0;
+  }, [selectedMonth, incomeRecords, expenseRecords, partnerSettlements, partners, accountMonths]);
+
+  const getBalancesForPartner = (partnerId: string, partnerName: string) => {
+    const norm = normalizePartnerName(partnerName);
+    const found = currentMonthPartnerBalances.find(
+      (b) =>
+        b.partnerId === partnerId ||
+        normalizePartnerName(b.partnerName) === norm
+    );
+    const netBal = found ? Number(found.netBalance) || 0 : 0;
     return {
-      balanceToHotel: found ? Number(found.balance_to_hotel) || 0 : 0,
-      expensesByThem: found ? Number(found.expenses_by_them) || 0 : 0,
+      balanceToHotel: netBal > 0 ? netBal : 0,
+      expensesByThem: netBal < 0 ? Math.abs(netBal) : 0,
       netBalance: netBal,
     };
   };
 
-  // Only official partners (IRSHAD, ANSARI, MUSADDIQ, SATHISH, YOGESH)
-  const officialNames = ['IRSHAD', 'ANSARI', 'MUSADDIQ', 'SATHISH', 'YOGESH'];
-  const validPartners = partners.filter((p) =>
-    officialNames.includes(p.name.trim().toUpperCase())
-  );
+  // Only official partners (ANSARI, IRSHAD, MUSADDIQ, SATHISH, YOGESH)
+  const officialNames = ['ANSARI', 'IRSHAD', 'MUSADDIQ', 'SATHISH', 'YOGESH'];
+  const validPartners = useMemo(() => {
+    return partners
+      .filter((p) => officialNames.includes(p.name.trim().toUpperCase()))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [partners]);
 
-  const getPartnerSettlements = (partner: Partner) => {
-    return partnerSettlements.filter((s: any) => {
-      const sPartnerId = String(s.partnerId || s.partner_id || '');
-      const sPartnerName = String(s.partnerName || s.partner_name || '').trim().toUpperCase();
-      return (
-        sPartnerId === String(partner.id) ||
-        (sPartnerName && sPartnerName === partner.name.trim().toUpperCase())
-      );
-    }).sort((a: any, b: any) => {
-      const dateA = a.date || a.settlement_date || '';
-      const dateB = b.date || b.settlement_date || '';
-      return dateB.localeCompare(dateA) || ((b.created_at || '') > (a.created_at || '') ? 1 : -1);
-    });
+  // Strictly filter settlements for this partner belonging ONLY to the selected accounting month
+  const getPartnerSettlementsForSelectedMonth = (partner: Partner) => {
+    return partnerSettlements
+      .filter((s: any) => {
+        const sPartnerId = String(s.partnerId || s.partner_id || '');
+        const sPartnerName = String(s.partnerName || s.partner_name || '').trim().toUpperCase();
+        const isMatch =
+          sPartnerId === String(partner.id) ||
+          (sPartnerName && sPartnerName === partner.name.trim().toUpperCase());
+        if (!isMatch) return false;
+
+        const sMonth = getSettlementMonthKey(s);
+        return sMonth === selectedMonth;
+      })
+      .sort((a: any, b: any) => {
+        const dateA = a.date || a.settlement_date || '';
+        const dateB = b.date || b.settlement_date || '';
+        return dateB.localeCompare(dateA) || ((b.created_at || '') > (a.created_at || '') ? 1 : -1);
+      });
   };
 
-  // Display partners who have an active balance, expenses, or any settlement history
-  const displayedPartners = validPartners.filter((partner) => {
-    const { netBalance, balanceToHotel, expensesByThem } = getBalancesForPartner(
-      partner.id,
-      partner.name
-    );
-    const history = getPartnerSettlements(partner);
-    return (
-      Math.round(netBalance) !== 0 ||
-      balanceToHotel > 0 ||
-      expensesByThem > 0 ||
-      history.length > 0
-    );
-  });
+  // Dynamically display ONLY partners who have active balances, expenses, or settlements in the selected month
+  const displayedPartners = useMemo(() => {
+    return validPartners.filter((partner) => {
+      const { netBalance, balanceToHotel, expensesByThem } = getBalancesForPartner(
+        partner.id,
+        partner.name
+      );
+      const history = getPartnerSettlementsForSelectedMonth(partner);
+      return (
+        Math.round(netBalance) !== 0 ||
+        balanceToHotel > 0 ||
+        expensesByThem > 0 ||
+        history.length > 0
+      );
+    });
+  }, [validPartners, currentMonthPartnerBalances, partnerSettlements, selectedMonth]);
 
   const handleOpenCreateSettlement = (
     partner: Partner,
@@ -150,7 +251,7 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
     setSettlementAmount(currentBalance > 0 ? currentBalance.toString() : '');
     const today = getTodayDateString();
     setSettlementDate(today);
-    setSettlementMonth(today.substring(0, 7));
+    setSettlementMonth(selectedMonth || today.substring(0, 7));
     setSettlementNotes('');
     setValidationError(null);
   };
@@ -181,9 +282,7 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
     setSettlementAmount(String(settlement.amount));
     const sDate = settlement.date || settlement.settlement_date || getTodayDateString();
     setSettlementDate(sDate);
-    const sMonth = settlement.settlementMonth
-      ? settlement.settlementMonth.substring(0, 7)
-      : sDate.substring(0, 7);
+    const sMonth = getSettlementMonthKey(settlement) || selectedMonth;
     setSettlementMonth(sMonth);
     setSettlementNotes(settlement.notes || '');
     setValidationError(null);
@@ -201,32 +300,38 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
     settlement: any
   ) => {
     const isToHotel =
-      settlement.type === 'balance_to_hotel' || settlement.settlement_type === 'to_hotel';
+      settlement.type === 'balance_to_hotel' ||
+      settlement.settlement_type === 'to_hotel';
+
     setDeleteModal({
       id: String(settlement.id),
       partnerName: partner.name,
       typeLabel: isToHotel ? 'To Hotel' : 'From Hotel',
-      amount: Number(settlement.amount) || 0,
-      date: settlement.date || settlement.settlement_date || '',
-      notes: settlement.notes || undefined,
+      amount: Number(settlement.amount),
+      date: settlement.date || settlement.settlement_date,
+      notes: settlement.notes,
     });
   };
 
   const handleConfirmDelete = async () => {
     if (!deleteModal) return;
+
     setIsSubmitting(true);
     try {
       await onDeleteSettlement(deleteModal.id);
       setFeedbackMsg(
-        `Deleted settlement of ${formatCurrency(deleteModal.amount)} for ${deleteModal.partnerName}.`
+        `Deleted ${deleteModal.typeLabel} settlement of ${formatCurrency(
+          deleteModal.amount
+        )} for ${deleteModal.partnerName}.`
       );
       setDeleteModal(null);
+
       setTimeout(() => {
         setFeedbackMsg(null);
       }, 3500);
     } catch (err: any) {
       console.error('Error deleting settlement:', err);
-      setFeedbackMsg(`Failed to delete settlement: ${err.message || 'Unknown error'}`);
+      setValidationError(err.message || 'Failed to delete settlement from Supabase.');
     } finally {
       setIsSubmitting(false);
     }
@@ -238,25 +343,14 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
 
     const parsedAmount = parseFloat(settlementAmount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      setValidationError('Please enter a valid settlement amount greater than 0.');
+      setValidationError('Please enter a valid positive settlement amount.');
       return;
     }
 
-    if (!settlementDate || !settlementDate.trim()) {
-      setValidationError('Please select a valid settlement date.');
-      return;
-    }
-
-    if (settlementType !== 'balance_to_hotel' && settlementType !== 'expenses_by_them') {
-      setValidationError('Please select a valid settlement type.');
-      return;
-    }
-
-    // When creating, validate against current balance if positive
     if (
       activeModal.mode === 'create' &&
       activeModal.currentBalance > 0 &&
-      parsedAmount > activeModal.currentBalance
+      parsedAmount > activeModal.currentBalance + 0.01
     ) {
       setValidationError(
         `Amount cannot exceed the current balance of ${formatCurrency(
@@ -319,23 +413,69 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
     }
   };
 
-  if (showIrshadDetails) {
+  if (showWallet) {
     return (
-      <IrshadDetailsPage
-        incomeRecords={incomeRecords}
-        expenseRecords={expenseRecords}
-        partnerSettlements={partnerSettlements as PartnerSettlement[]}
-        partners={partners}
-        onBack={() => setShowIrshadDetails(false)}
-        onAddSettlement={onAddSettlement}
-        onDeleteSettlement={onDeleteSettlement}
+      <WalletPage
+        onBack={() => setShowWallet(false)}
+        walletEntries={walletEntries}
+        onSettleWallet={onSettleWallet}
+        isLoading={isLoading}
       />
     );
   }
 
   return (
     <div id="partner-tab-container" className="space-y-4">
-      {/* Section Heading with Warm Gold Accent */}
+      {/* 1. Compact Month Navigation Selector at the Very Top */}
+      <div
+        id="partner-month-selector"
+        className="flex items-center justify-between bg-[#171717] px-3.5 py-2.5 rounded-xl border border-[#2A2A2A] shadow-sm"
+      >
+        <button
+          type="button"
+          id="btn-partner-prev-month"
+          onClick={handlePrevMonth}
+          disabled={!hasPrevMonth}
+          className={`p-2 rounded-lg transition-all flex items-center justify-center cursor-pointer ${
+            hasPrevMonth
+              ? 'text-[#D4AF37] hover:text-[#F2C94C] hover:bg-[#222222] active:scale-95'
+              : 'text-[#444444] cursor-not-allowed opacity-35'
+          }`}
+          title={hasPrevMonth ? 'Previous Month' : 'Earliest Accounting Month'}
+          aria-label="Previous Month"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+
+        <div className="text-center select-none">
+          <span className="text-xs sm:text-sm font-black text-[#D4AF37] tracking-wider uppercase">
+            {formatPdfMonth(selectedMonth).toUpperCase()}
+          </span>
+          {selectedMonth === getCurrentMonthString() && (
+            <span className="block text-[9px] font-bold text-[#888888] tracking-widest uppercase mt-0.5">
+              Current Active Month
+            </span>
+          )}
+        </div>
+
+        <button
+          type="button"
+          id="btn-partner-next-month"
+          onClick={handleNextMonth}
+          disabled={!hasNextMonth}
+          className={`p-2 rounded-lg transition-all flex items-center justify-center cursor-pointer ${
+            hasNextMonth
+              ? 'text-[#D4AF37] hover:text-[#F2C94C] hover:bg-[#222222] active:scale-95'
+              : 'text-[#444444] cursor-not-allowed opacity-35'
+          }`}
+          title={hasNextMonth ? 'Next Month' : 'Latest Accounting Month'}
+          aria-label="Next Month"
+        >
+          <ChevronRight className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Section Heading with Dynamic Active Partner Count */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-[#D4AF37]" />
@@ -344,7 +484,7 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
           </h2>
         </div>
         <span className="text-[11px] font-bold text-[#D4AF37] bg-[#171717] px-2 py-0.5 rounded border border-[#2A2A2A]">
-          {displayedPartners.length} Active Partners
+          {displayedPartners.length} {displayedPartners.length === 1 ? 'Active Partner' : 'Active Partners'}
         </span>
       </div>
 
@@ -368,24 +508,24 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
         </div>
       )}
 
-      {/* List of Active Partners */}
-      <div
-        className="bg-[#171717] rounded-xl border border-[#2A2A2A] shadow-md overflow-hidden"
-        id="partner-list"
-      >
-        {displayedPartners.length === 0 ? (
-          <div className="py-8 text-center text-[#777777] text-xs font-medium">
-            {isLoading
-              ? 'Loading partners from Supabase...'
-              : 'No active partner balances or expenses to display.'}
-          </div>
-        ) : (
-          displayedPartners.map((partner, index) => {
+      {/* List of Active Partners for Selected Month */}
+      {displayedPartners.length === 0 ? (
+        <div className="py-8 text-center text-[#777777] text-xs font-medium bg-[#171717] rounded-xl border border-[#2A2A2A] shadow-md">
+          {isLoading
+            ? 'Loading partners from Supabase...'
+            : `No partner activity for ${formatPdfMonth(selectedMonth)}.`}
+        </div>
+      ) : (
+        <div
+          className="bg-[#171717] rounded-xl border border-[#2A2A2A] shadow-md overflow-hidden"
+          id="partner-list"
+        >
+          {displayedPartners.map((partner, index) => {
             const { netBalance, balanceToHotel, expensesByThem } = getBalancesForPartner(
               partner.id,
               partner.name
             );
-            const history = getPartnerSettlements(partner);
+            const history = getPartnerSettlementsForSelectedMonth(partner);
             const isNotLast = index < displayedPartners.length - 1;
 
             return (
@@ -407,7 +547,7 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
                     </span>
                   </div>
 
-                  {/* Net Running Balance Badge */}
+                  {/* Net Running Balance Badge (Hidden if net is 0) */}
                   {Math.round(netBalance) !== 0 && (
                     <div
                       id={`partner-${partner.name.toLowerCase()}-net-status-banner`}
@@ -428,173 +568,175 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
                     </div>
                   )}
 
-                  {/* 1. Balance to Hotel (Partner owes Hotel) */}
-                  <div
-                    id={`partner-${partner.name.toLowerCase()}-balance-to-hotel-box`}
-                    className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] flex items-center justify-between gap-2"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <span className="text-xs font-semibold text-[#B8B8B8] block">
-                        Balance to Hotel
-                      </span>
-                      <span className="text-sm sm:text-base font-black text-[#f87171] block mt-0.5">
-                        {formatCurrency(balanceToHotel)}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      id={`btn-settle-balance-${partner.name.toLowerCase()}`}
-                      onClick={() =>
-                        handleOpenCreateSettlement(partner, 'balance_to_hotel', balanceToHotel)
-                      }
-                      disabled={balanceToHotel <= 0}
-                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all shrink-0 min-h-[36px] flex items-center justify-center ${
-                        balanceToHotel > 0
-                          ? 'border border-[#D4AF37] bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] font-black shadow-xs cursor-pointer'
-                          : 'border border-[#2A2A2A] bg-[#111111] text-[#777777] cursor-not-allowed opacity-50'
-                      }`}
+                  {/* 1. Balance to Hotel (Partner owes Hotel) - Render ONLY if > 0 */}
+                  {balanceToHotel > 0 && (
+                    <div
+                      id={`partner-${partner.name.toLowerCase()}-balance-to-hotel-box`}
+                      className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] flex items-center justify-between gap-2"
                     >
-                      Settlement
-                    </button>
-                  </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-xs font-semibold text-[#B8B8B8] block">
+                          Balance to Hotel
+                        </span>
+                        <span className="text-sm sm:text-base font-black text-[#f87171] block mt-0.5">
+                          {formatCurrency(balanceToHotel)}
+                        </span>
+                      </div>
 
-                  {/* 2. Expenses by them (Hotel owes Partner) */}
-                  <div
-                    id={`partner-${partner.name.toLowerCase()}-expenses-by-them-box`}
-                    className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] flex items-center justify-between gap-2"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <span className="text-xs font-semibold text-[#B8B8B8] block">
-                        Expenses by them
-                      </span>
-                      <span className="text-sm sm:text-base font-black text-[#F5F5F5] block mt-0.5">
-                        {formatCurrency(expensesByThem)}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      id={`btn-settle-expense-${partner.name.toLowerCase()}`}
-                      onClick={() =>
-                        handleOpenCreateSettlement(partner, 'expenses_by_them', expensesByThem)
-                      }
-                      disabled={expensesByThem <= 0}
-                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all shrink-0 min-h-[36px] flex items-center justify-center ${
-                        expensesByThem > 0
-                          ? 'border border-[#2A2A2A] bg-[#1D1D1D] hover:bg-[#D4AF37] hover:text-[#0A0A0A] hover:border-[#D4AF37] text-[#F5F5F5] shadow-xs cursor-pointer'
-                          : 'border border-[#2A2A2A] bg-[#111111] text-[#777777] cursor-not-allowed opacity-50'
-                      }`}
-                    >
-                      Settlement
-                    </button>
-                  </div>
-
-                  {/* DETAILS Button (Exclusive to IRSHAD card) */}
-                  {partner.name.trim().toUpperCase() === 'IRSHAD' && (
-                    <div className="pt-1">
                       <button
                         type="button"
-                        id="btn-irshad-details"
-                        onClick={() => setShowIrshadDetails(true)}
-                        className="w-full py-2.5 px-4 bg-[#111111] hover:bg-[#1D1D1D] border border-[#D4AF37] hover:border-[#F2C94C] text-[#D4AF37] hover:text-[#F2C94C] rounded-lg font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs min-h-[40px]"
+                        id={`btn-settle-balance-${partner.name.toLowerCase()}`}
+                        onClick={() =>
+                          handleOpenCreateSettlement(partner, 'balance_to_hotel', balanceToHotel)
+                        }
+                        className="px-3 py-1.5 rounded-md text-xs font-bold transition-all shrink-0 min-h-[36px] flex items-center justify-center border border-[#D4AF37] bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] font-black shadow-xs cursor-pointer"
                       >
-                        <span>DETAILS</span>
+                        Settlement
                       </button>
                     </div>
                   )}
 
-                  {/* 3. Settlement History Section inside each partner card */}
-                  <div className="pt-2 border-t border-[#242424] space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-[#D0D0D0] uppercase tracking-wider flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-[#D4AF37]" />
-                        Settlement History
-                      </span>
-                      {history.length > 0 && (
-                        <span className="text-[10px] text-[#888888] bg-[#111111] px-2 py-0.5 rounded border border-[#2A2A2A]">
+                  {/* 2. Expenses by them (Hotel owes Partner) - Render ONLY if > 0 */}
+                  {expensesByThem > 0 && (
+                    <div
+                      id={`partner-${partner.name.toLowerCase()}-expenses-by-them-box`}
+                      className="p-3 bg-[#111111] rounded-lg border border-[#2A2A2A] flex items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <span className="text-xs font-semibold text-[#B8B8B8] block">
+                          Expenses by them
+                        </span>
+                        <span className="text-sm sm:text-base font-black text-[#F5F5F5] block mt-0.5">
+                          {formatCurrency(expensesByThem)}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        id={`btn-settle-expense-${partner.name.toLowerCase()}`}
+                        onClick={() =>
+                          handleOpenCreateSettlement(partner, 'expenses_by_them', expensesByThem)
+                        }
+                        className="px-3 py-1.5 rounded-md text-xs font-bold transition-all shrink-0 min-h-[36px] flex items-center justify-center border border-[#2A2A2A] bg-[#1D1D1D] hover:bg-[#D4AF37] hover:text-[#0A0A0A] hover:border-[#D4AF37] text-[#F5F5F5] shadow-xs cursor-pointer"
+                      >
+                        Settlement
+                      </button>
+                    </div>
+                  )}
+
+                  {/* 3. Settlement History Section for this Partner in the Selected Month ONLY */}
+                  {history.length > 0 && (
+                    <div className="pt-2 border-t border-[#242424] space-y-2">
+                      {/* Collapsible Header */}
+                      <button
+                        type="button"
+                        id={`btn-toggle-history-${partner.name.toLowerCase()}`}
+                        onClick={() => togglePartnerHistory(partner.id)}
+                        className="w-full flex items-center justify-between p-2 rounded-lg bg-[#141414] hover:bg-[#1A1A1A] border border-[#242424] text-left cursor-pointer transition-colors select-none"
+                      >
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-[#D0D0D0] uppercase tracking-wider">
+                          <Clock className="w-3.5 h-3.5 text-[#D4AF37]" />
+                          <span>SETTLEMENT HISTORY</span>
+                          <span className="text-[#D4AF37] ml-1">
+                            {expandedPartnerHistory[partner.id] ? (
+                              <ChevronDown className="w-3.5 h-3.5 inline" />
+                            ) : (
+                              <ChevronRight className="w-3.5 h-3.5 inline" />
+                            )}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-[#888888] bg-[#0E0E0E] px-2 py-0.5 rounded border border-[#222222] font-semibold">
                           {history.length} {history.length === 1 ? 'record' : 'records'}
                         </span>
-                      )}
-                    </div>
+                      </button>
 
-                    {history.length === 0 ? (
-                      <div className="text-[11px] text-[#777777] italic py-1">
-                        No settlements yet
-                      </div>
-                    ) : (
-                      <div className="space-y-1.5">
-                        {history.map((s: any) => {
-                          const sDate = s.date || s.settlement_date || '';
-                          const isToHotel =
-                            s.type === 'balance_to_hotel' ||
-                            s.settlement_type === 'to_hotel';
-                          const typeLabel = isToHotel ? 'To Hotel' : 'From Hotel';
+                      {/* Expanded Settlement Records for Selected Month */}
+                      {expandedPartnerHistory[partner.id] && (
+                        <div className="space-y-1.5 pt-1 animate-fadeIn">
+                          {history.map((s: any) => {
+                            const sDate = s.date || s.settlement_date || '';
+                            const isToHotel =
+                              s.type === 'balance_to_hotel' ||
+                              s.settlement_type === 'to_hotel';
+                            const typeLabel = isToHotel ? 'TO HOTEL' : 'FROM HOTEL';
+                            const isAutoSettlement =
+                              (s.notes && s.notes.toUpperCase().includes('AUTO SETTLEMENT')) ||
+                              (s.notes && s.notes.toUpperCase().includes('MONTH CLOSE'));
 
-                          return (
-                            <div
-                              key={s.id}
-                              id={`settlement-row-${s.id}`}
-                              className="p-2.5 bg-[#111111] rounded-lg border border-[#242424] flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:border-[#333333] transition-colors"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center flex-wrap gap-2 text-xs">
-                                  <span className="font-semibold text-[#E0E0E0]">
-                                    {formatDateDisplay(sDate)}
-                                  </span>
-                                  <span
-                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase ${
-                                      isToHotel
-                                        ? 'bg-[#D4AF37]/15 text-[#F2C94C] border border-[#D4AF37]/30'
-                                        : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                    }`}
-                                  >
-                                    {typeLabel}
-                                  </span>
-                                  <span className="font-black text-[#F5F5F5] sm:hidden ml-auto text-xs">
+                            return (
+                              <div
+                                key={s.id}
+                                id={`settlement-row-${s.id}`}
+                                className={`p-2.5 rounded-lg border flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
+                                  isAutoSettlement
+                                    ? 'bg-[#141414] border-[#D4AF37]/30 hover:border-[#D4AF37]/50'
+                                    : 'bg-[#111111] border-[#242424] hover:border-[#333333]'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center flex-wrap gap-2 text-xs">
+                                    <span className="font-semibold text-[#E0E0E0]">
+                                      {formatDateDisplay(sDate)}
+                                    </span>
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase ${
+                                        isToHotel
+                                          ? 'bg-[#D4AF37]/15 text-[#F2C94C] border border-[#D4AF37]/30'
+                                          : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                      }`}
+                                    >
+                                      {typeLabel}
+                                    </span>
+                                    {isAutoSettlement && (
+                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-[#D4AF37]/20 text-[#D4AF37] border border-[#D4AF37]/40 uppercase tracking-wider">
+                                        Auto Settlement
+                                      </span>
+                                    )}
+                                    <span className="font-black text-[#F5F5F5] sm:hidden ml-auto text-xs">
+                                      {formatCurrency(s.amount)}
+                                    </span>
+                                  </div>
+                                  {s.notes && (
+                                    <div className="text-[11px] text-[#888888] mt-1 break-words">
+                                      <span className="text-[#666666]">Note:</span> {s.notes}
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center justify-between sm:justify-end gap-3 pt-1.5 sm:pt-0 border-t border-[#1C1C1C] sm:border-t-0">
+                                  <span className="hidden sm:inline-block font-black text-[#F5F5F5] text-xs sm:text-sm">
                                     {formatCurrency(s.amount)}
                                   </span>
-                                </div>
-                                {s.notes && (
-                                  <div className="text-[11px] text-[#888888] mt-1 break-words">
-                                    <span className="text-[#666666]">Note:</span> {s.notes}
+                                  <div className="flex items-center gap-1.5 ml-auto sm:ml-0">
+                                    <button
+                                      type="button"
+                                      id={`btn-edit-settlement-${s.id}`}
+                                      onClick={() => handleOpenEditSettlement(partner, s)}
+                                      className="px-2.5 py-1 rounded bg-[#1A1A1A] hover:bg-[#262626] text-[#D4AF37] hover:text-[#F2C94C] border border-[#333333] text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1 min-h-[30px]"
+                                      title="Edit Settlement"
+                                    >
+                                      <Edit2 className="w-3 h-3" />
+                                      <span>Edit</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      id={`btn-delete-settlement-${s.id}`}
+                                      onClick={() => handleOpenDeleteConfirm(partner, s)}
+                                      className="px-2.5 py-1 rounded bg-[#1A1A1A] hover:bg-[#2C1515] text-[#f87171] hover:text-[#ef4444] border border-[#333333] hover:border-[#5a2222] text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1 min-h-[30px]"
+                                      title="Delete Settlement"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                      <span>Delete</span>
+                                    </button>
                                   </div>
-                                )}
-                              </div>
-
-                              <div className="flex items-center justify-between sm:justify-end gap-3 pt-1.5 sm:pt-0 border-t border-[#1C1C1C] sm:border-t-0">
-                                <span className="hidden sm:inline-block font-black text-[#F5F5F5] text-xs sm:text-sm">
-                                  {formatCurrency(s.amount)}
-                                </span>
-                                <div className="flex items-center gap-1.5 ml-auto sm:ml-0">
-                                  <button
-                                    type="button"
-                                    id={`btn-edit-settlement-${s.id}`}
-                                    onClick={() => handleOpenEditSettlement(partner, s)}
-                                    className="px-2.5 py-1 rounded bg-[#1A1A1A] hover:bg-[#262626] text-[#D4AF37] hover:text-[#F2C94C] border border-[#333333] text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1 min-h-[30px]"
-                                    title="Edit Settlement"
-                                  >
-                                    <Edit2 className="w-3 h-3" />
-                                    <span>Edit</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    id={`btn-delete-settlement-${s.id}`}
-                                    onClick={() => handleOpenDeleteConfirm(partner, s)}
-                                    className="px-2.5 py-1 rounded bg-[#1A1A1A] hover:bg-[#2C1515] text-[#f87171] hover:text-[#ef4444] border border-[#333333] hover:border-[#5a2222] text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1 min-h-[30px]"
-                                    title="Delete Settlement"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                    <span>Delete</span>
-                                  </button>
                                 </div>
                               </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Clear Divider After Every Partner */}
@@ -603,10 +745,9 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
                 )}
               </React.Fragment>
             );
-          })
-        )}
-      </div>
-
+          })}
+        </div>
+      )}
       {/* ==================================================
           SETTLEMENT MODAL / FORM (CREATE & EDIT)
           ================================================== */}
@@ -892,6 +1033,19 @@ export const PartnerTab: React.FC<PartnerTabProps> = ({
           </div>
         </div>
       )}
+
+      {/* Floating Wallet Button (Fixed in Bottom-Right Corner) */}
+      <button
+        type="button"
+        id="btn-floating-wallet"
+        onClick={() => setShowWallet(true)}
+        className="fixed bottom-5 right-5 z-40 flex items-center justify-center gap-1.5 bg-[#141414] hover:bg-[#1F1F1F] active:bg-[#262626] border border-[#D4AF37] text-[#D4AF37] hover:text-[#F2C94C] px-3.5 py-2.5 rounded-full font-bold text-xs shadow-2xl hover:shadow-[#D4AF37]/20 transition-all cursor-pointer active:scale-95"
+        title="Open Irshad Wallet"
+        aria-label="Open Irshad Wallet"
+      >
+        <Wallet className="w-4 h-4 text-[#D4AF37]" />
+        <span>Wallet</span>
+      </button>
     </div>
   );
 };

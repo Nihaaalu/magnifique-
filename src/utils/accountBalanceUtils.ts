@@ -1,5 +1,135 @@
 import { IncomeRecord, ExpenseRecord, PartnerSettlement, AccountMonthRow } from '../types';
 
+/**
+ * Official Business Accounting Start Month: September 2026.
+ * No accounting period or previous-month assignment is valid before this month.
+ */
+export const BUSINESS_START_ACCOUNTING_MONTH = '2026-09';
+
+/**
+ * Extracts the accounting month (YYYY-MM) for an expense record.
+ * Falls back to the expense_date month if accountingMonth is not explicitly set.
+ */
+export function getExpenseAccountingMonth(record: {
+  accountingMonth?: string | null;
+  accounting_month?: string | null;
+  date?: string | null;
+  expense_date?: string | null;
+}): string {
+  if (record.accountingMonth && record.accountingMonth.length >= 7) {
+    return record.accountingMonth.substring(0, 7);
+  }
+  if (record.accounting_month && record.accounting_month.length >= 7) {
+    return record.accounting_month.substring(0, 7);
+  }
+  const d = record.date || record.expense_date;
+  if (d && d.length >= 7) {
+    return d.substring(0, 7);
+  }
+  return '';
+}
+
+/**
+ * Computes the immediately previous month in 'YYYY-MM' format.
+ * e.g. '2026-10' -> '2026-09', '2026-01' -> '2025-12'
+ */
+export function getPreviousMonthString(monthStr: string): string {
+  if (!monthStr || monthStr.length < 7) return '';
+  const [yStr, mStr] = monthStr.split('-');
+  let y = parseInt(yStr, 10);
+  let m = parseInt(mStr, 10);
+  if (m === 1) {
+    y -= 1;
+    m = 12;
+  } else {
+    m -= 1;
+  }
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+
+/**
+ * Checks if a given month is officially closed in account_months.
+ * Any month prior to BUSINESS_START_ACCOUNTING_MONTH is considered permanently closed/unavailable.
+ */
+export function isMonthClosed(monthStr: string, accountMonths: AccountMonthRow[] = []): boolean {
+  if (!monthStr) return true;
+  const prefix = monthStr.substring(0, 7);
+  if (prefix < BUSINESS_START_ACCOUNTING_MONTH) {
+    return true;
+  }
+  const found = accountMonths.find((m) => m.month_start && m.month_start.startsWith(prefix));
+  return Boolean(found && found.is_closed);
+}
+
+/**
+ * Checks if a given month exists in account_months or has actual accounting transaction data.
+ * Any month prior to BUSINESS_START_ACCOUNTING_MONTH does not exist in business accounting.
+ */
+export function doesMonthExistInRecords(
+  monthStr: string,
+  accountMonths: AccountMonthRow[] = [],
+  incomeRecords: IncomeRecord[] = [],
+  expenseRecords: ExpenseRecord[] = []
+): boolean {
+  if (!monthStr || monthStr.length < 7) return false;
+  const prefix = monthStr.substring(0, 7);
+  if (prefix < BUSINESS_START_ACCOUNTING_MONTH) {
+    return false;
+  }
+
+  // 1. Check if defined in account_months table
+  const foundInAccountMonths = accountMonths.some(
+    (m) => m.month_start && m.month_start.startsWith(prefix)
+  );
+  if (foundInAccountMonths) return true;
+
+  // 2. Check if any actual income or expense records exist for this month
+  const hasIncome = incomeRecords.some((r) => r.date && r.date.startsWith(prefix));
+  const hasExpense = expenseRecords.some(
+    (r) =>
+      (r.date && r.date.startsWith(prefix)) ||
+      (r.accountingMonth && r.accountingMonth.startsWith(prefix)) ||
+      (r.accounting_month && r.accounting_month.startsWith(prefix))
+  );
+
+  return hasIncome || hasExpense;
+}
+
+/**
+ * Checks if a previous month is eligible for an expense date.
+ * A previous month is eligible ONLY IF:
+ * 1. prevMonth >= BUSINESS_START_ACCOUNTING_MONTH ('2026-09')
+ * 2. The previous month actually exists in the database (account_months or actual accounting data)
+ * 3. The previous month is NOT closed (is_closed is false)
+ * 4. The expense date's month is strictly the calendar month immediately following the previous month
+ */
+export function isPreviousMonthEligible(
+  expenseDate: string,
+  accountMonths: AccountMonthRow[] = [],
+  incomeRecords: IncomeRecord[] = [],
+  expenseRecords: ExpenseRecord[] = []
+): boolean {
+  if (!expenseDate || expenseDate.length < 7) return false;
+  const expMonth = expenseDate.substring(0, 7);
+  const prevMonth = getPreviousMonthString(expMonth);
+  if (!prevMonth) return false;
+
+  // 1. Business started September 2026: any month before '2026-09' is permanently ineligible
+  if (prevMonth < BUSINESS_START_ACCOUNTING_MONTH) {
+    return false;
+  }
+
+  // 2. Must exist in account_months (or actual database records)
+  const exists = doesMonthExistInRecords(prevMonth, accountMonths, incomeRecords, expenseRecords);
+  if (!exists) return false;
+
+  // 3. Must NOT be closed
+  const closed = isMonthClosed(prevMonth, accountMonths);
+  if (closed) return false;
+
+  return true;
+}
+
 export interface MonthBalanceSummary {
   month: string; // 'YYYY-MM'
   monthStart: string; // 'YYYY-MM-01'
@@ -61,25 +191,44 @@ export function getAllAvailableAccountDates(
 export function getAllAvailableAccountMonths(
   incomeRecords: IncomeRecord[] = [],
   expenseRecords: ExpenseRecord[] = [],
-  accountMonths: AccountMonthRow[] = []
+  accountMonths: AccountMonthRow[] = [],
+  partnerSettlements: any[] = []
 ): string[] {
   const monthSet = new Set<string>();
 
   incomeRecords.forEach((r) => {
     if (r.date && r.date.length >= 7) {
-      monthSet.add(r.date.substring(0, 7));
+      const m = r.date.substring(0, 7);
+      if (m >= BUSINESS_START_ACCOUNTING_MONTH) {
+        monthSet.add(m);
+      }
     }
   });
 
   expenseRecords.forEach((r) => {
-    if (r.date && r.date.length >= 7) {
-      monthSet.add(r.date.substring(0, 7));
+    const expM = getExpenseAccountingMonth(r);
+    if (expM && expM >= BUSINESS_START_ACCOUNTING_MONTH) {
+      monthSet.add(expM);
     }
   });
 
   accountMonths.forEach((m) => {
-    if (m.month_start && m.month_start.length >= 7 && (m.is_closed || (m.total_income && m.total_income > 0) || (m.total_expense && m.total_expense > 0))) {
-      monthSet.add(m.month_start.substring(0, 7));
+    if (
+      m.month_start &&
+      m.month_start.length >= 7 &&
+      (m.is_closed || (m.total_income && m.total_income > 0) || (m.total_expense && m.total_expense > 0))
+    ) {
+      const mStr = m.month_start.substring(0, 7);
+      if (mStr >= BUSINESS_START_ACCOUNTING_MONTH) {
+        monthSet.add(mStr);
+      }
+    }
+  });
+
+  partnerSettlements.forEach((s) => {
+    const sMonth = s.settlement_month || (s.date ? s.date.substring(0, 7) : '');
+    if (sMonth && sMonth >= BUSINESS_START_ACCOUNTING_MONTH) {
+      monthSet.add(sMonth.substring(0, 7));
     }
   });
 
@@ -98,29 +247,43 @@ export function getAllUniqueMonths(
   const monthSet = new Set<string>();
 
   const currentMonth = new Date().toISOString().substring(0, 7);
-  monthSet.add(currentMonth);
+  if (currentMonth >= BUSINESS_START_ACCOUNTING_MONTH) {
+    monthSet.add(currentMonth);
+  } else {
+    monthSet.add(BUSINESS_START_ACCOUNTING_MONTH);
+  }
 
   incomeRecords.forEach((r) => {
     if (r.date && r.date.length >= 7) {
-      monthSet.add(r.date.substring(0, 7));
+      const m = r.date.substring(0, 7);
+      if (m >= BUSINESS_START_ACCOUNTING_MONTH) {
+        monthSet.add(m);
+      }
     }
   });
 
   expenseRecords.forEach((r) => {
-    if (r.date && r.date.length >= 7) {
-      monthSet.add(r.date.substring(0, 7));
+    const expM = getExpenseAccountingMonth(r);
+    if (expM && expM >= BUSINESS_START_ACCOUNTING_MONTH) {
+      monthSet.add(expM);
     }
   });
 
   accountMonths.forEach((m) => {
     if (m.month_start && m.month_start.length >= 7) {
-      monthSet.add(m.month_start.substring(0, 7));
+      const mStr = m.month_start.substring(0, 7);
+      if (mStr >= BUSINESS_START_ACCOUNTING_MONTH) {
+        monthSet.add(mStr);
+      }
     }
   });
 
   partnerSettlements.forEach((s) => {
     if (s.date && s.date.length >= 7) {
-      monthSet.add(s.date.substring(0, 7));
+      const mStr = s.date.substring(0, 7);
+      if (mStr >= BUSINESS_START_ACCOUNTING_MONTH) {
+        monthSet.add(mStr);
+      }
     }
   });
 
@@ -138,6 +301,7 @@ export function getAllUniqueMonths(
  * 5. If previous month was NOT officially closed: Opening Balance = ₹0.
  * 6. Closing balance formula: Closing Balance = Opening Balance + Total Income - Total Expense.
  * 7. Total Income means TOTAL BILLED amount (total_amount), including unpaid balance.
+ * 8. Total Expense means all expenses whose accounting_month matches this month.
  */
 export function calculateAllMonthsSummary(
   incomeRecords: IncomeRecord[] = [],
@@ -158,9 +322,9 @@ export function calculateAllMonthsSummary(
     const isClosed = dbMonth ? !!dbMonth.is_closed : false;
     const closedAt = dbMonth ? dbMonth.closed_at : null;
 
-    // Filter records for this month
+    // Filter records for this month: Income uses actual date; Expenses use accounting_month
     const mIncome = incomeRecords.filter((r) => r.date && r.date.startsWith(month));
-    const mExpense = expenseRecords.filter((r) => r.date && r.date.startsWith(month));
+    const mExpense = expenseRecords.filter((r) => getExpenseAccountingMonth(r) === month);
     const mSettlements = partnerSettlements.filter((s) => s.date && s.date.startsWith(month));
 
     const totalIncome = mIncome.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
@@ -218,6 +382,108 @@ export function calculateAllMonthsSummary(
   }
 
   return result;
+}
+
+/**
+ * Authoritative single calculation function for any accounting month summary.
+ * Used identically across Monthly PDF, Closing Balance PDF, Closing Balance page, Analytics, and DB sync.
+ *
+ * FORMULA:
+ * - TOTAL INCOME = SUM(income_entries.total_amount) for this accounting month
+ * - TOTAL PAID = SUM(income_entries.amount_received) for this accounting month
+ * - TOTAL BALANCE = SUM(income_entries.balance_amount) for this accounting month
+ * - TOTAL EXPENSE = SUM(expense_entries.amount) for this accounting month
+ * - CLOSING BALANCE = OPENING BALANCE + TOTAL INCOME - TOTAL EXPENSE
+ */
+export function calculateMonthSummary(
+  monthStr: string,
+  incomeRecords: IncomeRecord[] = [],
+  expenseRecords: ExpenseRecord[] = [],
+  accountMonths: AccountMonthRow[] = [],
+  partnerSettlements: PartnerSettlement[] = []
+): MonthBalanceSummary {
+  if (!monthStr) {
+    return {
+      month: '',
+      monthStart: '',
+      openingBalance: 0,
+      totalIncome: 0,
+      totalPaid: 0,
+      totalBalance: 0,
+      totalExpense: 0,
+      settlementToHotel: 0,
+      settlementFromHotel: 0,
+      closingBalance: 0,
+      isClosed: false,
+      closedAt: null,
+      firstDate: '',
+      lastDate: '',
+    };
+  }
+
+  const all = calculateAllMonthsSummary(
+    incomeRecords,
+    expenseRecords,
+    accountMonths,
+    partnerSettlements
+  );
+
+  if (all[monthStr]) {
+    return all[monthStr];
+  }
+
+  // Fallback direct calculation if month was not in sorted unique months
+  const mIncome = incomeRecords.filter((r) => r.date && r.date.startsWith(monthStr));
+  const mExpense = expenseRecords.filter((r) => getExpenseAccountingMonth(r) === monthStr);
+  const mSettlements = partnerSettlements.filter((s) => s.date && s.date.startsWith(monthStr));
+
+  const totalIncome = mIncome.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
+  const totalPaid = mIncome.reduce((acc, r) => acc + (Number(r.amountPaid) || 0), 0);
+  const totalBalance = mIncome.reduce((acc, r) => acc + (Number(r.balance) || 0), 0);
+  const totalExpense = mExpense.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
+
+  const settlementToHotel = mSettlements.reduce((acc, s) => {
+    if (s.type === 'balance_to_hotel') return acc + (Number(s.amount) || 0);
+    return acc;
+  }, 0);
+
+  const settlementFromHotel = mSettlements.reduce((acc, s) => {
+    if (s.type === 'expenses_by_them') return acc + (Number(s.amount) || 0);
+    return acc;
+  }, 0);
+
+  const dbMonth = accountMonths.find((m) => m.month_start && m.month_start.startsWith(monthStr));
+  const isClosed = dbMonth ? !!dbMonth.is_closed : false;
+  const closedAt = dbMonth ? dbMonth.closed_at : null;
+
+  let opening = 0;
+  if (dbMonth && dbMonth.opening_balance !== null && dbMonth.opening_balance !== undefined) {
+    opening = Number(dbMonth.opening_balance);
+  }
+
+  const closing = opening + totalIncome - totalExpense;
+
+  const [yearStr, monthNumStr] = monthStr.split('-');
+  const year = parseInt(yearStr, 10) || 2026;
+  const monthNum = parseInt(monthNumStr, 10) || 9;
+  const lastDayOfMonth = new Date(year, monthNum, 0).getDate();
+
+  return {
+    month: monthStr,
+    monthStart: `${monthStr}-01`,
+    openingBalance: opening,
+    totalIncome,
+    totalPaid,
+    totalBalance,
+    totalExpense,
+    settlementToHotel,
+    settlementFromHotel,
+    closingBalance: closing,
+    isClosed,
+    closedAt,
+    firstDate: `${monthStr}-01`,
+    lastDate: `${monthStr}-${String(lastDayOfMonth).padStart(2, '0')}`,
+  };
 }
 
 /**

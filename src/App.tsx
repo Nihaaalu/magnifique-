@@ -10,6 +10,7 @@ import {
   IncomeEntryRow,
   ExpenseEntryRow,
   AccountMonthRow,
+  IrshadWalletEntry,
 } from './types';
 import {
   fetchPartners,
@@ -31,9 +32,16 @@ import {
   getOrCreateAccountMonth,
   closeAccountMonthInDb,
   reopenAccountMonthInDb,
+  syncAccountMonthWithLiveTransactions,
+  fetchIrshadWalletEntries,
+  settleIrshadWallet,
 } from './services/supabaseService';
 import { getCurrentMonthString } from './utils/formatters';
-import { calculateAllMonthsSummary } from './utils/accountBalanceUtils';
+import {
+  calculateAllMonthsSummary,
+  getExpenseAccountingMonth,
+  getAllUniqueMonths,
+} from './utils/accountBalanceUtils';
 import { Navbar } from './components/Navbar';
 import { IncomeTab } from './components/IncomeTab';
 import { ExpenseTab } from './components/ExpenseTab';
@@ -59,6 +67,7 @@ export default function App() {
   const [partnerBalances, setPartnerBalances] = useState<PartnerCurrentBalance[]>([]);
   const [partnerSettlements, setPartnerSettlements] = useState<PartnerSettlement[]>([]);
   const [accountMonths, setAccountMonths] = useState<AccountMonthRow[]>([]);
+  const [walletEntries, setWalletEntries] = useState<IrshadWalletEntry[]>([]);
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -176,6 +185,56 @@ export default function App() {
     };
   }, [isLocked]);
 
+  // Helper to sync account months with transaction data in background
+  const syncMonthsWithTransactions = useCallback(
+    async (
+      incomeData: IncomeRecord[],
+      expenseData: ExpenseRecord[],
+      rawMonths: AccountMonthRow[],
+      settlementsData: PartnerSettlement[]
+    ) => {
+      const summaries = calculateAllMonthsSummary(
+        incomeData,
+        expenseData,
+        rawMonths,
+        settlementsData
+      );
+
+      // Unique active months
+      const uniqueMonths = getAllUniqueMonths(
+        incomeData,
+        expenseData,
+        rawMonths,
+        settlementsData
+      );
+
+      // Check and reconcile DB rows in the background
+      uniqueMonths.forEach((mStr) => {
+        const summary = summaries[mStr];
+        const existingRow = rawMonths.find(
+          (m) => m.month_start && m.month_start.startsWith(mStr)
+        );
+
+        if (summary) {
+          // If row exists and has mismatch, or if row does not exist, sync to DB
+          if (
+            !existingRow ||
+            existingRow.total_income !== summary.totalIncome ||
+            existingRow.total_paid !== summary.totalPaid ||
+            existingRow.total_balance !== summary.totalBalance ||
+            existingRow.total_expense !== summary.totalExpense ||
+            existingRow.closing_balance !== summary.closingBalance
+          ) {
+            syncAccountMonthWithLiveTransactions(mStr).catch((e) =>
+              console.warn(`Could not sync account_months for ${mStr}:`, e)
+            );
+          }
+        }
+      });
+    },
+    []
+  );
+
   // Load all initial data from Supabase PostgreSQL
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -188,6 +247,7 @@ export default function App() {
         balancesData,
         settlementsData,
         monthsData,
+        walletData,
       ] = await Promise.all([
         fetchPartners(),
         fetchIncomeEntries(),
@@ -195,6 +255,7 @@ export default function App() {
         fetchPartnerCurrentBalances(),
         fetchPartnerSettlements(),
         fetchAccountMonths(),
+        fetchIrshadWalletEntries(),
       ]);
 
       setPartners(partnersData);
@@ -202,29 +263,54 @@ export default function App() {
       setExpenseRecords(expenseData);
       setPartnerBalances(balancesData);
       setPartnerSettlements(settlementsData);
-      setAccountMonths(monthsData);
+      setWalletEntries(walletData);
+
+      // Recalculate account_months dynamically from transaction records as SINGLE SOURCE OF TRUTH
+      const calculatedSummaries = calculateAllMonthsSummary(
+        incomeData,
+        expenseData,
+        monthsData,
+        settlementsData
+      );
+
+      // Map accountMonths state to transaction-derived totals
+      const reconciledMonths: AccountMonthRow[] = monthsData.map((m) => {
+        const mKey = m.month_start.substring(0, 7);
+        const sum = calculatedSummaries[mKey];
+        if (sum) {
+          return {
+            ...m,
+            total_income: sum.totalIncome,
+            total_paid: sum.totalPaid,
+            total_balance: sum.totalBalance,
+            total_expense: sum.totalExpense,
+            closing_balance: sum.closingBalance,
+          };
+        }
+        return m;
+      });
+
+      setAccountMonths(reconciledMonths);
+
+      // Background DB synchronization of any stale account_months aggregate columns
+      syncMonthsWithTransactions(incomeData, expenseData, monthsData, settlementsData);
 
       // Ensure current month exists in account_months
       const curMonth = getCurrentMonthString();
       const exists = monthsData.some((m) => m.month_start && m.month_start.startsWith(curMonth));
       if (!exists) {
-        // Calculate initial opening balance for current month based on previous months
-        const calculatedSummaries = calculateAllMonthsSummary(
-          incomeData,
-          expenseData,
-          monthsData,
-          settlementsData
-        );
         const curSummary = calculatedSummaries[curMonth];
         const initialOpening = curSummary ? curSummary.openingBalance : 0;
-        getOrCreateAccountMonth(curMonth, initialOpening).then((newMonth) => {
-          setAccountMonths((prev) => {
-            if (prev.some((m) => m.month_start && m.month_start.startsWith(curMonth))) {
-              return prev;
-            }
-            return [...prev, newMonth];
-          });
-        }).catch((e) => console.warn('Could not auto-create account_month in DB:', e));
+        getOrCreateAccountMonth(curMonth, initialOpening)
+          .then((newMonth) => {
+            setAccountMonths((prev) => {
+              if (prev.some((m) => m.month_start && m.month_start.startsWith(curMonth))) {
+                return prev;
+              }
+              return [...prev, newMonth];
+            });
+          })
+          .catch((e) => console.warn('Could not auto-create account_month in DB:', e));
       }
     } catch (err: any) {
       console.error('Failed to load data from Supabase:', err);
@@ -235,7 +321,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [syncMonthsWithTransactions]);
 
   useEffect(() => {
     loadData();
@@ -246,19 +332,52 @@ export default function App() {
     entry: Omit<IncomeEntryRow, 'id' | 'created_at' | 'updated_at'>
   ) => {
     await createIncomeEntry(entry);
-    const [updatedIncome, updatedBalances] = await Promise.all([
+    const [updatedIncome, updatedBalances, updatedMonths] = await Promise.all([
       fetchIncomeEntries(),
       fetchPartnerCurrentBalances(),
+      fetchAccountMonths(),
     ]);
     setIncomeRecords(updatedIncome);
     setPartnerBalances(updatedBalances);
+
+    // Sync affected month from database transaction records
+    const incMonth = entry.entry_date ? entry.entry_date.substring(0, 7) : '';
+    if (incMonth) {
+      syncAccountMonthWithLiveTransactions(incMonth).catch(() => {});
+    }
+
+    const calculatedSummaries = calculateAllMonthsSummary(
+      updatedIncome,
+      expenseRecords,
+      updatedMonths,
+      partnerSettlements
+    );
+    setAccountMonths(
+      updatedMonths.map((m) => {
+        const mKey = m.month_start.substring(0, 7);
+        const sum = calculatedSummaries[mKey];
+        return sum
+          ? {
+              ...m,
+              total_income: sum.totalIncome,
+              total_paid: sum.totalPaid,
+              total_balance: sum.totalBalance,
+              total_expense: sum.totalExpense,
+              closing_balance: sum.closingBalance,
+            }
+          : m;
+      })
+    );
   };
 
   const handleUpdateIncome = async (
     id: string,
     updates: Partial<IncomeRecord>
   ) => {
-    // Map IncomeRecord back to row format if updating
+    // Identify old month before update
+    const oldEntry = incomeRecords.find((r) => r.id === id);
+    const oldMonth = oldEntry?.date ? oldEntry.date.substring(0, 7) : '';
+
     const rowUpdates: Partial<IncomeEntryRow> = {};
     if (updates.date !== undefined) rowUpdates.entry_date = updates.date;
     if (updates.incomeType !== undefined) {
@@ -291,22 +410,80 @@ export default function App() {
     }
 
     await updateIncomeEntry(id, rowUpdates);
-    const [updatedIncome, updatedBalances] = await Promise.all([
+    const [updatedIncome, updatedBalances, updatedMonths] = await Promise.all([
       fetchIncomeEntries(),
       fetchPartnerCurrentBalances(),
+      fetchAccountMonths(),
     ]);
     setIncomeRecords(updatedIncome);
     setPartnerBalances(updatedBalances);
+
+    // Sync affected month(s) from database transaction records
+    const newMonth = updates.date ? updates.date.substring(0, 7) : oldMonth;
+    if (oldMonth) syncAccountMonthWithLiveTransactions(oldMonth).catch(() => {});
+    if (newMonth && newMonth !== oldMonth) syncAccountMonthWithLiveTransactions(newMonth).catch(() => {});
+
+    const calculatedSummaries = calculateAllMonthsSummary(
+      updatedIncome,
+      expenseRecords,
+      updatedMonths,
+      partnerSettlements
+    );
+    setAccountMonths(
+      updatedMonths.map((m) => {
+        const mKey = m.month_start.substring(0, 7);
+        const sum = calculatedSummaries[mKey];
+        return sum
+          ? {
+              ...m,
+              total_income: sum.totalIncome,
+              total_paid: sum.totalPaid,
+              total_balance: sum.totalBalance,
+              total_expense: sum.totalExpense,
+              closing_balance: sum.closingBalance,
+            }
+          : m;
+      })
+    );
   };
 
   const handleDeleteIncome = async (id: string) => {
+    const oldEntry = incomeRecords.find((r) => r.id === id);
+    const oldMonth = oldEntry?.date ? oldEntry.date.substring(0, 7) : '';
+
     await deleteIncomeEntry(id);
-    const [updatedIncome, updatedBalances] = await Promise.all([
+    const [updatedIncome, updatedBalances, updatedMonths] = await Promise.all([
       fetchIncomeEntries(),
       fetchPartnerCurrentBalances(),
+      fetchAccountMonths(),
     ]);
     setIncomeRecords(updatedIncome);
     setPartnerBalances(updatedBalances);
+
+    if (oldMonth) syncAccountMonthWithLiveTransactions(oldMonth).catch(() => {});
+
+    const calculatedSummaries = calculateAllMonthsSummary(
+      updatedIncome,
+      expenseRecords,
+      updatedMonths,
+      partnerSettlements
+    );
+    setAccountMonths(
+      updatedMonths.map((m) => {
+        const mKey = m.month_start.substring(0, 7);
+        const sum = calculatedSummaries[mKey];
+        return sum
+          ? {
+              ...m,
+              total_income: sum.totalIncome,
+              total_paid: sum.totalPaid,
+              total_balance: sum.totalBalance,
+              total_expense: sum.totalExpense,
+              closing_balance: sum.closingBalance,
+            }
+          : m;
+      })
+    );
   };
 
   const handleSettleIncome = async (
@@ -319,12 +496,39 @@ export default function App() {
       payment_date: paymentDate,
       amount,
     });
-    const [updatedIncome, updatedBalances] = await Promise.all([
+    const [updatedIncome, updatedBalances, updatedMonths] = await Promise.all([
       fetchIncomeEntries(),
       fetchPartnerCurrentBalances(),
+      fetchAccountMonths(),
     ]);
     setIncomeRecords(updatedIncome);
     setPartnerBalances(updatedBalances);
+
+    const payMonth = paymentDate ? paymentDate.substring(0, 7) : '';
+    if (payMonth) syncAccountMonthWithLiveTransactions(payMonth).catch(() => {});
+
+    const calculatedSummaries = calculateAllMonthsSummary(
+      updatedIncome,
+      expenseRecords,
+      updatedMonths,
+      partnerSettlements
+    );
+    setAccountMonths(
+      updatedMonths.map((m) => {
+        const mKey = m.month_start.substring(0, 7);
+        const sum = calculatedSummaries[mKey];
+        return sum
+          ? {
+              ...m,
+              total_income: sum.totalIncome,
+              total_paid: sum.totalPaid,
+              total_balance: sum.totalBalance,
+              total_expense: sum.totalExpense,
+              closing_balance: sum.closingBalance,
+            }
+          : m;
+      })
+    );
   };
 
   // Expense Operations
@@ -332,20 +536,57 @@ export default function App() {
     entry: Omit<ExpenseEntryRow, 'id' | 'created_at' | 'updated_at'>
   ) => {
     await createExpenseEntry(entry);
-    const [updatedExpenses, updatedBalances] = await Promise.all([
+    const [updatedExpenses, updatedBalances, updatedMonths] = await Promise.all([
       fetchExpenseEntries(),
       fetchPartnerCurrentBalances(),
+      fetchAccountMonths(),
     ]);
     setExpenseRecords(updatedExpenses);
     setPartnerBalances(updatedBalances);
+
+    // Determine affected accounting month
+    const expAccMonth = entry.accounting_month
+      ? entry.accounting_month.substring(0, 7)
+      : entry.expense_date
+      ? entry.expense_date.substring(0, 7)
+      : '';
+    if (expAccMonth) syncAccountMonthWithLiveTransactions(expAccMonth).catch(() => {});
+
+    const calculatedSummaries = calculateAllMonthsSummary(
+      incomeRecords,
+      updatedExpenses,
+      updatedMonths,
+      partnerSettlements
+    );
+    setAccountMonths(
+      updatedMonths.map((m) => {
+        const mKey = m.month_start.substring(0, 7);
+        const sum = calculatedSummaries[mKey];
+        return sum
+          ? {
+              ...m,
+              total_income: sum.totalIncome,
+              total_paid: sum.totalPaid,
+              total_balance: sum.totalBalance,
+              total_expense: sum.totalExpense,
+              closing_balance: sum.closingBalance,
+            }
+          : m;
+      })
+    );
   };
 
   const handleUpdateExpense = async (
     id: string,
     updates: Partial<ExpenseRecord>
   ) => {
+    const oldEntry = expenseRecords.find((r) => r.id === id);
+    const oldMonth = oldEntry ? getExpenseAccountingMonth(oldEntry) : '';
+
     const rowUpdates: Partial<ExpenseEntryRow> = {};
     if (updates.date !== undefined) rowUpdates.expense_date = updates.date;
+    if (updates.accountingMonth !== undefined) rowUpdates.accounting_month = updates.accountingMonth;
+    if (updates.accounting_month !== undefined) rowUpdates.accounting_month = updates.accounting_month;
     if (updates.category !== undefined) rowUpdates.category = updates.category;
     if (updates.description !== undefined) {
       rowUpdates.description = updates.description || null;
@@ -359,32 +600,95 @@ export default function App() {
     }
 
     await updateExpenseEntry(id, rowUpdates);
-    const [updatedExpenses, updatedBalances] = await Promise.all([
+    const [updatedExpenses, updatedBalances, updatedMonths] = await Promise.all([
       fetchExpenseEntries(),
       fetchPartnerCurrentBalances(),
+      fetchAccountMonths(),
     ]);
     setExpenseRecords(updatedExpenses);
     setPartnerBalances(updatedBalances);
+
+    // Sync both old month and new month if changed
+    const newEntry = updatedExpenses.find((r) => r.id === id);
+    const newMonth = newEntry ? getExpenseAccountingMonth(newEntry) : oldMonth;
+    if (oldMonth) syncAccountMonthWithLiveTransactions(oldMonth).catch(() => {});
+    if (newMonth && newMonth !== oldMonth) syncAccountMonthWithLiveTransactions(newMonth).catch(() => {});
+
+    const calculatedSummaries = calculateAllMonthsSummary(
+      incomeRecords,
+      updatedExpenses,
+      updatedMonths,
+      partnerSettlements
+    );
+    setAccountMonths(
+      updatedMonths.map((m) => {
+        const mKey = m.month_start.substring(0, 7);
+        const sum = calculatedSummaries[mKey];
+        return sum
+          ? {
+              ...m,
+              total_income: sum.totalIncome,
+              total_paid: sum.totalPaid,
+              total_balance: sum.totalBalance,
+              total_expense: sum.totalExpense,
+              closing_balance: sum.closingBalance,
+            }
+          : m;
+      })
+    );
   };
 
   const handleDeleteExpense = async (id: string) => {
+    const oldEntry = expenseRecords.find((r) => r.id === id);
+    const oldMonth = oldEntry ? getExpenseAccountingMonth(oldEntry) : '';
+
     await deleteExpenseEntry(id);
-    const [updatedExpenses, updatedBalances] = await Promise.all([
+    const [updatedExpenses, updatedBalances, updatedMonths] = await Promise.all([
       fetchExpenseEntries(),
       fetchPartnerCurrentBalances(),
+      fetchAccountMonths(),
     ]);
     setExpenseRecords(updatedExpenses);
     setPartnerBalances(updatedBalances);
+
+    if (oldMonth) syncAccountMonthWithLiveTransactions(oldMonth).catch(() => {});
+
+    const calculatedSummaries = calculateAllMonthsSummary(
+      incomeRecords,
+      updatedExpenses,
+      updatedMonths,
+      partnerSettlements
+    );
+    setAccountMonths(
+      updatedMonths.map((m) => {
+        const mKey = m.month_start.substring(0, 7);
+        const sum = calculatedSummaries[mKey];
+        return sum
+          ? {
+              ...m,
+              total_income: sum.totalIncome,
+              total_paid: sum.totalPaid,
+              total_balance: sum.totalBalance,
+              total_expense: sum.totalExpense,
+              closing_balance: sum.closingBalance,
+            }
+          : m;
+      })
+    );
   };
 
-  // Partner Settlement Operations
+  // Partner Settlement & Wallet Operations
   const refreshPartnerData = async () => {
-    const [updatedSettlements, updatedBalances] = await Promise.all([
+    const [updatedSettlements, updatedBalances, updatedWallet, updatedMonths] = await Promise.all([
       fetchPartnerSettlements(),
       fetchPartnerCurrentBalances(),
+      fetchIrshadWalletEntries(),
+      fetchAccountMonths(),
     ]);
     setPartnerSettlements(updatedSettlements);
     setPartnerBalances(updatedBalances);
+    setWalletEntries(updatedWallet);
+    setAccountMonths(updatedMonths);
   };
 
   const handleAddSettlement = async (
@@ -407,28 +711,20 @@ export default function App() {
     await refreshPartnerData();
   };
 
+  const handleSettleWallet = async (monthStart: string, amount: number) => {
+    await settleIrshadWallet(monthStart, amount);
+    await refreshPartnerData();
+  };
+
   // Month Close / Reopen Operations
   const handleCloseMonth = async (monthStr: string, closingBalance: number) => {
     await closeAccountMonthInDb(monthStr, closingBalance);
-    // Set next month's normal accounting opening balance to 0
-    try {
-      const [y, m] = monthStr.split('-').map(Number);
-      const nextDate = new Date(y, m, 1);
-      const nextY = nextDate.getFullYear();
-      const nextM = String(nextDate.getMonth() + 1).padStart(2, '0');
-      const nextMonthKey = `${nextY}-${nextM}`;
-      await getOrCreateAccountMonth(nextMonthKey, 0);
-    } catch (e) {
-      console.warn('Could not initialize next month opening balance:', e);
-    }
-    const updatedMonths = await fetchAccountMonths();
-    setAccountMonths(updatedMonths);
+    await loadData();
   };
 
   const handleReopenMonth = async (monthStr: string) => {
     await reopenAccountMonthInDb(monthStr);
-    const updatedMonths = await fetchAccountMonths();
-    setAccountMonths(updatedMonths);
+    await loadData();
   };
 
   const handleRefresh = async () => {
@@ -527,6 +823,7 @@ export default function App() {
             expenseRecords={expenseRecords}
             incomeRecords={incomeRecords}
             partners={partners}
+            accountMonths={accountMonths}
             onAddExpense={handleAddExpense}
             onDeleteExpense={handleDeleteExpense}
             onUpdateExpense={handleUpdateExpense}
@@ -541,9 +838,12 @@ export default function App() {
             partnerSettlements={partnerSettlements}
             incomeRecords={incomeRecords}
             expenseRecords={expenseRecords}
+            accountMonths={accountMonths}
+            walletEntries={walletEntries}
             onAddSettlement={handleAddSettlement}
             onUpdateSettlement={handleUpdateSettlement}
             onDeleteSettlement={handleDeleteSettlement}
+            onSettleWallet={handleSettleWallet}
             isLoading={isLoading}
           />
         )}

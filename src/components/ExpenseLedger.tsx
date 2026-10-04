@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ExpenseRecord, IncomeRecord, Partner, ExpenseCategory } from '../types';
+import React, { useState, useMemo } from 'react';
+import { ExpenseRecord, IncomeRecord, Partner, ExpenseCategory, AccountMonthRow } from '../types';
 import {
   LedgerPeriodMode,
   DateRange,
@@ -21,6 +21,12 @@ import {
   formatDateDisplay,
   getTodayDateString,
 } from '../utils/formatters';
+import {
+  getExpenseAccountingMonth,
+  getPreviousMonthString,
+  isPreviousMonthEligible,
+} from '../utils/accountBalanceUtils';
+import { formatPdfMonth } from '../services/pdfReportGenerator';
 import { useSwipeNavigation } from '../utils/useSwipeNavigation';
 import {
   ChevronLeft,
@@ -34,6 +40,7 @@ interface ExpenseLedgerProps {
   expenseRecords: ExpenseRecord[];
   incomeRecords: IncomeRecord[];
   partners?: Partner[];
+  accountMonths?: AccountMonthRow[];
   onDeleteExpense: (id: string) => void | Promise<void>;
   onUpdateExpense?: (id: string, updatedRecord: Partial<ExpenseRecord>) => void | Promise<void>;
 }
@@ -42,6 +49,7 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
   expenseRecords,
   incomeRecords,
   partners = [],
+  accountMonths = [],
   onDeleteExpense,
   onUpdateExpense,
 }) => {
@@ -67,6 +75,7 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
   // Edit Modal State
   const [editingRecord, setEditingRecord] = useState<ExpenseRecord | null>(null);
   const [editDate, setEditDate] = useState<string>('');
+  const [editAccountingMonth, setEditAccountingMonth] = useState<string>('');
   const [editCategory, setEditCategory] = useState<ExpenseCategory>('Groceries');
   const [editName, setEditName] = useState<string>('');
   const [editAmount, setEditAmount] = useState<string>('');
@@ -74,6 +83,24 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Edit Modal Accounting Month calculations
+  const editExpenseMonthKey = useMemo(() => {
+    return editDate ? editDate.substring(0, 7) : '';
+  }, [editDate]);
+
+  const editPrevMonthKey = useMemo(() => {
+    return editExpenseMonthKey ? getPreviousMonthString(editExpenseMonthKey) : '';
+  }, [editExpenseMonthKey]);
+
+  const isEditPrevMonthOpen = useMemo(() => {
+    return isPreviousMonthEligible(
+      editDate,
+      accountMonths,
+      incomeRecords,
+      expenseRecords
+    );
+  }, [editDate, accountMonths, incomeRecords, expenseRecords]);
 
   const handlePrev = () => {
     if (periodMode === 'day') {
@@ -181,6 +208,7 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
   const handleOpenEdit = (record: ExpenseRecord) => {
     setEditingRecord(record);
     setEditDate(record.date);
+    setEditAccountingMonth(getExpenseAccountingMonth(record));
     setEditCategory(record.category);
     setEditName(record.description || record.name || '');
     setEditAmount(String(record.amount));
@@ -206,8 +234,14 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
         (p) => p.name.toLowerCase() === editPaidBy.toLowerCase()
       );
 
+      const targetAccMonth = editAccountingMonth
+        ? (editAccountingMonth.length === 7 ? `${editAccountingMonth}-01` : editAccountingMonth)
+        : `${editDate.substring(0, 7)}-01`;
+
       await onUpdateExpense(editingRecord.id, {
         date: editDate,
+        accountingMonth: targetAccMonth,
+        accounting_month: targetAccMonth,
         category: editCategory,
         description: editName.trim().toUpperCase() || null,
         name: editName.trim().toUpperCase() || undefined,
@@ -241,6 +275,9 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
   const renderExpenseRow = (record: ExpenseRecord) => {
     const isDeleting = deletingId === record.id;
     const mainTitle = record.description || record.name || record.category;
+    const accM = getExpenseAccountingMonth(record);
+    const dateM = record.date ? record.date.substring(0, 7) : '';
+    const hasDifferentAccMonth = accM && dateM && accM !== dateM;
 
     return (
       <div
@@ -258,6 +295,11 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
             {(record.description || record.name) && (
               <span className="font-semibold text-[#D4AF37] uppercase text-[10px] bg-[#1D1D1D] px-1.5 py-0.5 rounded border border-[#2A2A2A]">
                 {record.category}
+              </span>
+            )}
+            {hasDifferentAccMonth && (
+              <span className="font-bold text-[#4ade80] uppercase text-[9px] bg-[#132213] px-1.5 py-0.5 rounded border border-[#274827]">
+                ACC: {formatPdfMonth(accM)}
               </span>
             )}
           </div>
@@ -537,6 +579,39 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
                   />
                 </div>
               </div>
+
+              {/* Edit Accounting Month (if previous month is open or current assignment matches previous month) */}
+              {((isEditPrevMonthOpen && editPrevMonthKey) || (editAccountingMonth && editAccountingMonth === editPrevMonthKey)) && (
+                <div className="p-2 bg-[#111111] rounded border border-[#2A2A2A] space-y-1">
+                  <label className="block text-[10px] text-[#D0D0D0] font-semibold">
+                    Accounting Month
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditAccountingMonth(editExpenseMonthKey)}
+                      className={`py-1.5 px-1 text-[11px] font-bold rounded uppercase ${
+                        (editAccountingMonth || editExpenseMonthKey) === editExpenseMonthKey
+                          ? 'bg-[#D4AF37] text-[#0A0A0A]'
+                          : 'bg-[#171717] text-[#B8B8B8] border border-[#2A2A2A]'
+                      }`}
+                    >
+                      {formatPdfMonth(editExpenseMonthKey)}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditAccountingMonth(editPrevMonthKey)}
+                      className={`py-1.5 px-1 text-[11px] font-bold rounded uppercase ${
+                        editAccountingMonth === editPrevMonthKey
+                          ? 'bg-[#D4AF37] text-[#0A0A0A]'
+                          : 'bg-[#171717] text-[#B8B8B8] border border-[#2A2A2A]'
+                      }`}
+                    >
+                      {formatPdfMonth(editPrevMonthKey)}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-[11px] text-[#D0D0D0] mb-1 font-semibold">Description</label>

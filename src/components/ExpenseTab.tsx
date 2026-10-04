@@ -1,21 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ExpenseCategory,
   ExpenseRecord,
   IncomeRecord,
   Partner,
   ExpenseEntryRow,
+  AccountMonthRow,
 } from '../types';
 import {
   formatCurrency,
   getTodayDateString,
 } from '../utils/formatters';
+import {
+  getPreviousMonthString,
+  isPreviousMonthEligible,
+} from '../utils/accountBalanceUtils';
+import { formatPdfMonth } from '../services/pdfReportGenerator';
 import { ExpenseLedger } from './ExpenseLedger';
 
 interface ExpenseTabProps {
   expenseRecords: ExpenseRecord[];
   incomeRecords: IncomeRecord[];
   partners: Partner[];
+  accountMonths?: AccountMonthRow[];
   onAddExpense: (record: Omit<ExpenseEntryRow, 'id' | 'created_at' | 'updated_at'>) => Promise<void>;
   onDeleteExpense: (id: string) => Promise<void>;
   onUpdateExpense?: (id: string, updatedRecord: Partial<ExpenseRecord>) => Promise<void>;
@@ -26,6 +33,7 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
   expenseRecords,
   incomeRecords,
   partners,
+  accountMonths = [],
   onAddExpense,
   onDeleteExpense,
   onUpdateExpense,
@@ -37,9 +45,39 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
   const [paidBy, setPaidBy] = useState<string>('Hotel');
   const [expenseDate, setExpenseDate] = useState<string>(getTodayDateString());
 
+  // Accounting Month state ('YYYY-MM')
+  const [selectedAccountingMonth, setSelectedAccountingMonth] = useState<string>(() => {
+    return (expenseDate || getTodayDateString()).substring(0, 7);
+  });
+
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // Accounting Month calculation based on expenseDate and accountMonths status
+  const expenseMonthKey = useMemo(() => {
+    return (expenseDate || getTodayDateString()).substring(0, 7);
+  }, [expenseDate]);
+
+  const previousMonthKey = useMemo(() => {
+    return getPreviousMonthString(expenseMonthKey);
+  }, [expenseMonthKey]);
+
+  const isPreviousMonthOpen = useMemo(() => {
+    return isPreviousMonthEligible(
+      expenseDate || getTodayDateString(),
+      accountMonths,
+      incomeRecords,
+      expenseRecords
+    );
+  }, [expenseDate, accountMonths, incomeRecords, expenseRecords]);
+
+  // Keep selectedAccountingMonth in sync when expenseDate changes
+  useEffect(() => {
+    if (selectedAccountingMonth !== previousMonthKey || !isPreviousMonthOpen) {
+      setSelectedAccountingMonth(expenseMonthKey);
+    }
+  }, [expenseMonthKey, previousMonthKey, isPreviousMonthOpen]);
 
   const paidByOptions = ['Hotel', ...partners.map((p) => p.name)];
 
@@ -61,6 +99,7 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
     setDescription('');
     setAmount('');
     setPaidBy('Hotel');
+    setSelectedAccountingMonth(expenseMonthKey);
     setValidationError(null);
   };
 
@@ -78,10 +117,19 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
       (p) => p.name.toLowerCase() === paidBy.toLowerCase()
     );
 
+    // Enforce accounting month assignment:
+    // If previous month is chosen and open, assign to previous month (${previousMonthKey}-01),
+    // otherwise assign to entry month (${expenseMonthKey}-01).
+    const effectiveAccountingMonth =
+      isPreviousMonthOpen && selectedAccountingMonth === previousMonthKey
+        ? `${previousMonthKey}-01`
+        : `${expenseMonthKey}-01`;
+
     setIsSubmitting(true);
     try {
       await onAddExpense({
         expense_date: expenseDate || getTodayDateString(),
+        accounting_month: effectiveAccountingMonth,
         category,
         description: description.trim().toUpperCase() || null,
         amount: parsedAmount,
@@ -89,7 +137,10 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
         paid_by_partner_id: matchedPartner ? matchedPartner.id : null,
       });
 
-      setFeedbackMsg(`Saved ${category} expense (${formatCurrency(parsedAmount)}) to Supabase`);
+      const accMonthLabel = formatPdfMonth(effectiveAccountingMonth.substring(0, 7));
+      setFeedbackMsg(
+        `Saved ${category} expense (${formatCurrency(parsedAmount)}) assigned to ${accMonthLabel}`
+      );
       handleResetForm();
 
       setTimeout(() => {
@@ -223,6 +274,49 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
               </div>
             </div>
 
+            {/* ACCOUNTING MONTH (Shown only if previous month is still OPEN) */}
+            {isPreviousMonthOpen && previousMonthKey && (
+              <div className="p-2.5 bg-[#111111] rounded-lg border border-[#2A2A2A] space-y-1.5 animate-fadeIn">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[11px] font-semibold text-[#D0D0D0]">
+                    Accounting Month
+                  </label>
+                  <span className="text-[10px] text-[#888888] font-medium">
+                    Which month should this expense belong to?
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2" id="expense-accounting-month-options">
+                  <button
+                    type="button"
+                    id="acc-month-current-btn"
+                    onClick={() => setSelectedAccountingMonth(expenseMonthKey)}
+                    className={`py-2 px-2 rounded-md text-xs font-bold transition-all cursor-pointer text-center min-h-[42px] uppercase tracking-wide ${
+                      selectedAccountingMonth === expenseMonthKey
+                        ? 'bg-[#D4AF37] text-[#0A0A0A] font-black shadow-xs border border-[#D4AF37]'
+                        : 'bg-[#171717] text-[#B8B8B8] hover:bg-[#1D1D1D] hover:text-[#F5F5F5] border border-[#2A2A2A]'
+                    }`}
+                  >
+                    <span>{formatPdfMonth(expenseMonthKey).toUpperCase()}</span>
+                    <span className="block text-[9px] font-medium opacity-80 mt-0.5">(Current Month)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    id="acc-month-prev-btn"
+                    onClick={() => setSelectedAccountingMonth(previousMonthKey)}
+                    className={`py-2 px-2 rounded-md text-xs font-bold transition-all cursor-pointer text-center min-h-[42px] uppercase tracking-wide ${
+                      selectedAccountingMonth === previousMonthKey
+                        ? 'bg-[#D4AF37] text-[#0A0A0A] font-black shadow-xs border border-[#D4AF37]'
+                        : 'bg-[#171717] text-[#B8B8B8] hover:bg-[#1D1D1D] hover:text-[#F5F5F5] border border-[#2A2A2A]'
+                    }`}
+                  >
+                    <span>{formatPdfMonth(previousMonthKey).toUpperCase()}</span>
+                    <span className="block text-[9px] font-medium text-[#4ade80] opacity-90 mt-0.5">(Previous - Open)</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Description */}
             <div>
               <label className="block text-[11px] font-semibold text-[#D0D0D0] mb-1">
@@ -325,6 +419,7 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
           expenseRecords={expenseRecords}
           incomeRecords={incomeRecords}
           partners={partners}
+          accountMonths={accountMonths}
           onDeleteExpense={onDeleteExpense}
           onUpdateExpense={onUpdateExpense}
         />

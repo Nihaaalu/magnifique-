@@ -84,6 +84,7 @@ export type ExpenseCategory = 'Staff' | 'Groceries' | 'Other';
 export interface ExpenseEntryRow {
   id: string;
   expense_date: string;
+  accounting_month?: string | null;
   category: ExpenseCategory;
   description: string | null;
   amount: number;
@@ -96,6 +97,8 @@ export interface ExpenseEntryRow {
 export interface ExpenseRecord {
   id: string;
   date: string; // expense_date YYYY-MM-DD
+  accountingMonth?: string; // accounting_month YYYY-MM-01 or YYYY-MM
+  accounting_month?: string; // backwards-compatible alias
   time?: string;
   category: ExpenseCategory;
   description?: string | null;
@@ -165,5 +168,15 @@ export interface ProfitShareResult {
   sathishShare: number; // 25%
   yogeshShare: number; // 25%
   generatedAt: string;
+}
+
+export interface IrshadWalletEntry {
+  id?: string;
+  month_start: string; // 'YYYY-MM-01'
+  net_outstanding: number;
+  settled_amount: number;
+  remaining_outstanding: number;
+  created_at?: string;
+  updated_at?: string;
 }
 

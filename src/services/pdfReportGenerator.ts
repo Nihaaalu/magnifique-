@@ -4,6 +4,8 @@ import { IncomeRecord, ExpenseRecord, AccountMonthRow, PartnerSettlement, Partne
 import {
   calculateDayBalanceSummary,
   calculateAllMonthsSummary,
+  calculateMonthSummary,
+  getExpenseAccountingMonth,
 } from '../utils/accountBalanceUtils';
 import {
   calculatePartnerBalancesForDate,
@@ -12,6 +14,7 @@ import {
   isExpensePaidByPartner,
   isSettlementForPartner,
   getSettlementDirection,
+  calculateClosingProfitDistribution,
 } from '../utils/partnerBalanceUtils';
 
 // Format currency as Rs. 1,25,000 or -Rs. 2,000
@@ -20,6 +23,17 @@ export const formatPdfCurrency = (amount: number): string => {
   const num = Math.round(Math.abs(amount)) || 0;
   return `${isNegative ? '-' : ''}Rs. ${num.toLocaleString('en-IN')}`;
 };
+
+export const formatPdfCurrencyExact = (amount: number): string => {
+  const isNegative = amount < 0;
+  const abs = Math.abs(amount);
+  const formatted = Number.isInteger(abs)
+    ? abs.toLocaleString('en-IN')
+    : abs.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${isNegative ? '-' : ''}Rs. ${formatted}`;
+};
+
+export const formatInrPdf = formatPdfCurrencyExact;
 
 // Format Date YYYY-MM-DD to DD Month YYYY (e.g. 30 August 2026)
 export const formatPdfDate = (dateStr: string): string => {
@@ -737,27 +751,27 @@ export const generateMonthlyAccountsPdf = (
 ): jsPDF => {
   // Filter for the specific month
   const monthIncome = incomeRecords.filter((r) => r.date && r.date.startsWith(monthStr));
-  const monthExpenses = expenseRecords.filter((r) => r.date && r.date.startsWith(monthStr));
+  const monthExpenses = expenseRecords.filter((r) => getExpenseAccountingMonth(r) === monthStr);
 
   // Sort chronologically by date
   monthIncome.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   monthExpenses.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
-  const totalIncome = monthIncome.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
-  const totalPaid = monthIncome.reduce((acc, r) => acc + (Number(r.amountPaid) || 0), 0);
-  const totalBalance = monthIncome.reduce((acc, r) => acc + (Number(r.balance) || 0), 0);
-  const totalExpense = monthExpenses.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
-
-  // Monthly running balance calculation
-  const allMonths = calculateAllMonthsSummary(
+  // Authoritative Monthly Summary
+  const monthSummary = calculateMonthSummary(
+    monthStr,
     incomeRecords,
     expenseRecords,
     accountMonths,
     partnerSettlements
   );
-  const monthData = allMonths[monthStr];
-  const openingBalance = monthData?.openingBalance ?? 0;
-  const closingBalance = monthData?.closingBalance ?? (openingBalance + totalIncome - totalExpense);
+
+  const totalIncome = monthSummary.totalIncome;
+  const totalPaid = monthSummary.totalPaid;
+  const totalBalance = monthSummary.totalBalance;
+  const totalExpense = monthSummary.totalExpense;
+  const openingBalance = monthSummary.openingBalance;
+  const closingBalance = monthSummary.closingBalance;
 
   // Unique dates that actually have accounts in this month (sorted chronologically)
   const uniqueDates = Array.from(
@@ -781,7 +795,7 @@ export const generateMonthlyAccountsPdf = (
   } else if (uniqueDates.length > 0) {
     closingDateFormatted = formatPdfDateMedium(uniqueDates[uniqueDates.length - 1]);
   } else {
-    closingDateFormatted = formatPdfDateMedium(monthData?.lastDate || `${monthStr}-01`);
+    closingDateFormatted = formatPdfDateMedium(monthSummary?.lastDate || `${monthStr}-01`);
   }
 
   // Initialize Exact A4 Portrait Document (210mm x 297mm)
@@ -1184,8 +1198,20 @@ export const generateMonthlyAccountsPdf = (
 };
 
 /**
- * GENERATE CLOSING BALANCE PDF (Strictly 1 Page, Luxury Black & Gold Design)
- * Specifically for Analytics -> Closing Balance page
+ * GENERATE OFFICIAL CLOSING BALANCE PDF (SINGLE VERTICAL SECTION)
+ * 
+ * Strict Specification:
+ * 1. Top Header: MAGNIFIQUE 2.0 / CLOSING BALANCE / [Month] / Status Badge
+ * 2. 3 Key Metrics Cards: TOTAL INCOME, TOTAL EXPENSE, CLOSING BALANCE
+ * 3. Single Vertical Section: PROFIT DISTRIBUTION & PARTNER SETTLEMENT
+ *    - MUSADDIQ = 25%
+ *    - SATHISH = 25%
+ *    - YOGESH = 25%
+ *    - ANSARI = 12.5%
+ *    - IRSHAD = 12.5%
+ *    Total = 100%
+ * 4. Individual Partner Profit calculations using current database state.
+ * 5. Clean 1-page portrait layout.
  */
 export const generateClosingBalancePdf = (
   monthStr: string, // YYYY-MM
@@ -1195,193 +1221,40 @@ export const generateClosingBalancePdf = (
   partnerSettlements?: PartnerSettlement[],
   partners?: Partner[]
 ): jsPDF => {
-  // 1. Calculate Monthly Summaries
-  const allMonths = calculateAllMonthsSummary(
+  // 1. Authoritative Monthly Summary & Profit Distribution
+  const closingData = calculateClosingProfitDistribution(
+    monthStr,
     incomeRecords,
     expenseRecords,
     accountMonths,
-    partnerSettlements
+    partnerSettlements,
+    partners
   );
 
-  const monthIncome = incomeRecords.filter((r) => r.date && r.date.startsWith(monthStr));
-  const monthExpenses = expenseRecords.filter((r) => r.date && r.date.startsWith(monthStr));
-
-  const totalIncome = monthIncome.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
-  const totalExpense = monthExpenses.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
-
-  const monthData = allMonths[monthStr];
-  const openingBalance = monthData?.openingBalance ?? 0;
-  const closingBalance = monthData?.closingBalance ?? (openingBalance + totalIncome - totalExpense);
-
-  const dbMonth = accountMonths?.find((m) => m.month_start && m.month_start.startsWith(monthStr));
-  const isClosed = Boolean(dbMonth?.is_closed ?? monthData?.isClosed);
+  const totalIncome = closingData.totalIncome;
+  const totalExpense = closingData.totalExpense;
+  const openingBalance = closingData.openingBalance;
+  const closingBalance = closingData.closingBalance;
+  const isClosed = closingData.isClosed;
 
   const monthFormatted = formatPdfMonth(monthStr); // e.g. "September 2026"
 
-  // Profit Distribution Calculations (75% / 25% of Closing Balance)
-  const profitMagnifique = Math.round(Math.max(0, closingBalance) * 0.75);
-  const profitPartners = Math.round(Math.max(0, closingBalance) * 0.25);
+  const musaddiq = closingData.partners.find((p) => p.partnerName === 'MUSADDIQ')!;
+  const sathish = closingData.partners.find((p) => p.partnerName === 'SATHISH')!;
+  const yogesh = closingData.partners.find((p) => p.partnerName === 'YOGESH')!;
+  const ansari = closingData.partners.find((p) => p.partnerName === 'ANSARI')!;
+  const irshadStats = closingData.partners.find((p) => p.partnerName === 'IRSHAD')!;
 
-  // 2. Partner Data Extraction
-  // Target partners: IRSHAD, ANSARI, SATHISH, YOGESH (and any other active partners)
-  const targetPartners = ['IRSHAD', 'ANSARI', 'SATHISH', 'YOGESH'];
-  const allPartnersList = partners || [];
+  const partner4List = [musaddiq, sathish, yogesh, ansari].filter(Boolean);
 
-  // Collect all distinct months up to selected monthStr
-  const monthsSet = new Set<string>();
-  incomeRecords.forEach((r) => r.date && monthsSet.add(r.date.substring(0, 7)));
-  expenseRecords.forEach((r) => r.date && monthsSet.add(r.date.substring(0, 7)));
-  (partnerSettlements || []).forEach((s) => {
-    const m = s.settlementMonth
-      ? s.settlementMonth.substring(0, 7)
-      : s.date
-      ? s.date.substring(0, 7)
-      : '';
-    if (m) monthsSet.add(m);
-  });
-  if (monthStr) monthsSet.add(monthStr);
+  // IRSHAD: 12.5% share & business profit settlement
+  // IRSHAD PROFIT = 12.5% profit allocation
+  // IRSHAD OUTSTANDING = IRSHAD balance_to_hotel (incomeBalance) - IRSHAD expenses_by_them - IRSHAD settled amount
+  const irshadShare = irshadStats.baseProfit;
+  const irshadProfit = irshadStats.partnerProfit;
+  const irshadOutstanding = irshadStats.irshadTotalOutstanding || 0;
 
-  const allSortedMonths = Array.from(monthsSet)
-    .filter((m) => m <= monthStr)
-    .sort();
-
-  interface BalanceMonthItem {
-    month: string;
-    monthName: string;
-    amount: number;
-    direction: 'to_hotel' | 'from_hotel';
-  }
-
-  interface PartnerPdfSection {
-    partnerName: string;
-    balanceLabel: string;
-    balanceDirection: 'to_hotel' | 'from_hotel';
-    balanceMonths: BalanceMonthItem[];
-    totalBalance: number;
-    showBalanceTotal: boolean;
-    expenseLabel: string;
-    expenseMonths: { month: string; monthName: string; amount: number }[];
-    totalExpense: number;
-    showExpenseTotal: boolean;
-  }
-
-  const partnerSections: PartnerPdfSection[] = [];
-
-  for (const name of targetPartners) {
-    const p = allPartnersList.find((pt) => pt.name.trim().toUpperCase() === name);
-    const pid = p?.id;
-
-    const balanceMonths: BalanceMonthItem[] = [];
-    const expenseMonths: { month: string; monthName: string; amount: number }[] = [];
-
-    for (const m of allSortedMonths) {
-      const mInc = incomeRecords
-        .filter((r) => r.date && r.date.startsWith(m) && isIncomeAssignedToPartner(r, name, pid))
-        .reduce((sum, r) => sum + (Number(r.balance) > 0 ? Number(r.balance) : 0), 0);
-      const mExp = expenseRecords
-        .filter((r) => r.date && r.date.startsWith(m) && isExpensePaidByPartner(r, name, pid))
-        .reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
-
-      const mSettled = (partnerSettlements || []).filter((s) => {
-        if (!isSettlementForPartner(s, name, pid)) return false;
-        const sM = s.settlementMonth
-          ? s.settlementMonth.substring(0, 7)
-          : s.date
-          ? s.date.substring(0, 7)
-          : '';
-        return sM === m;
-      });
-
-      const toHotel = mSettled
-        .filter((s) => getSettlementDirection(s) === 'to_hotel')
-        .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
-      const fromHotel = mSettled
-        .filter((s) => getSettlementDirection(s) === 'from_hotel')
-        .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
-
-      const net = Math.round(mInc - mExp - toHotel + fromHotel);
-      if (net > 0) {
-        balanceMonths.push({
-          month: m,
-          monthName: formatPdfMonth(m).split(' ')[0],
-          amount: net,
-          direction: 'to_hotel',
-        });
-      } else if (net < 0) {
-        balanceMonths.push({
-          month: m,
-          monthName: formatPdfMonth(m).split(' ')[0],
-          amount: Math.abs(net),
-          direction: 'from_hotel',
-        });
-      }
-
-      if (mExp > 0) {
-        expenseMonths.push({
-          month: m,
-          monthName: formatPdfMonth(m).split(' ')[0],
-          amount: mExp,
-        });
-      }
-    }
-
-    // Cumulative net balance across all months up to selected month
-    const cumulativeNet = allSortedMonths.reduce((sum, m) => {
-      const mInc = incomeRecords
-        .filter((r) => r.date && r.date.startsWith(m) && isIncomeAssignedToPartner(r, name, pid))
-        .reduce((s, r) => s + (Number(r.balance) > 0 ? Number(r.balance) : 0), 0);
-      const mExp = expenseRecords
-        .filter((r) => r.date && r.date.startsWith(m) && isExpensePaidByPartner(r, name, pid))
-        .reduce((s, r) => s + (Number(r.amount) || 0), 0);
-      const mSettled = (partnerSettlements || []).filter((s) => {
-        if (!isSettlementForPartner(s, name, pid)) return false;
-        const sM = s.settlementMonth
-          ? s.settlementMonth.substring(0, 7)
-          : s.date
-          ? s.date.substring(0, 7)
-          : '';
-        return sM === m;
-      });
-      const toHotel = mSettled
-        .filter((s) => getSettlementDirection(s) === 'to_hotel')
-        .reduce((s, sItem) => s + (Number(sItem.amount) || 0), 0);
-      const fromHotel = mSettled
-        .filter((s) => getSettlementDirection(s) === 'from_hotel')
-        .reduce((s, sItem) => s + (Number(sItem.amount) || 0), 0);
-      return sum + (mInc - mExp - toHotel + fromHotel);
-    }, 0);
-
-    const balanceDirection: 'to_hotel' | 'from_hotel' = cumulativeNet >= 0 ? 'to_hotel' : 'from_hotel';
-    const balanceLabel = balanceDirection === 'to_hotel'
-      ? `${name} TO HOTEL`
-      : `HOTEL TO ${name}`;
-
-    const totalBalance = Math.abs(Math.round(cumulativeNet));
-    // Rule: Only show TOTAL OUTSTANDING when partner has outstanding from 2 OR MORE months
-    const showBalanceTotal = balanceMonths.length >= 2;
-    const totalExpense = expenseMonths.reduce((sum, e) => sum + e.amount, 0);
-    // Rule: Only show TOTAL EXPENSE when partner has expense from 2 OR MORE months
-    const showExpenseTotal = expenseMonths.length >= 2;
-    const expenseLabel = `EXPENSE BY ${name}`;
-
-    // Only include partner if they have balance or expenses
-    if (balanceMonths.length > 0 || expenseMonths.length > 0) {
-      partnerSections.push({
-        partnerName: name,
-        balanceLabel,
-        balanceDirection,
-        balanceMonths,
-        totalBalance,
-        showBalanceTotal,
-        expenseLabel,
-        expenseMonths,
-        totalExpense,
-        showExpenseTotal,
-      });
-    }
-  }
-
-  // 3. Initialize jsPDF (Strictly 1-page A4 Portrait)
+  // Initialize jsPDF (Strictly 1-page A4 Portrait: 595.28 pt x 841.89 pt)
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'pt',
@@ -1403,8 +1276,10 @@ export const generateClosingBalancePdf = (
   doc.setFillColor(26, 26, 26);
   doc.rect(0, 0, pageWidth, 5, 'F');
 
-  // --- TOP HEADER ---
-  let currentY = 38;
+  // ==================================================
+  // TOP HEADER
+  // ==================================================
+  let currentY = 36;
 
   // Title: MAGNIFIQUE 2.0
   doc.setFont(fontFamily, 'bold');
@@ -1435,7 +1310,7 @@ export const generateClosingBalancePdf = (
   const badgeWidth = badgeTextWidth + badgePaddingX * 2;
   const badgeHeight = 20;
   const badgeX = pageWidth - rightMargin - badgeWidth;
-  const badgeY = 36;
+  const badgeY = 34;
 
   if (isClosed) {
     doc.setFillColor(254, 242, 242); // Soft red
@@ -1457,14 +1332,16 @@ export const generateClosingBalancePdf = (
   doc.setLineWidth(1.5);
   doc.line(leftMargin, currentY, pageWidth - rightMargin, currentY);
 
-  // --- SECTION: 3 KEY METRICS ---
+  // ==================================================
+  // SECTION: 3 KEY METRICS CARDS
+  // ==================================================
   currentY += 14;
 
   const cardGap = 10;
   const cardWidth = (contentWidth - cardGap * 2) / 3;
-  const cardHeight = 48;
+  const cardHeight = 54;
 
-  // 1. TOTAL INCOME
+  // 1. TOTAL INCOME CARD
   const col1X = leftMargin;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(187, 247, 208); // Green border
@@ -1472,19 +1349,19 @@ export const generateClosingBalancePdf = (
   doc.roundedRect(col1X, currentY, cardWidth, cardHeight, 3, 3, 'FD');
 
   doc.setFillColor(34, 197, 94);
-  doc.rect(col1X, currentY, cardWidth, 2.5, 'F');
+  doc.rect(col1X, currentY, cardWidth, 3, 'F');
 
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(7.5);
+  doc.setFontSize(8);
   doc.setTextColor(22, 101, 52);
-  doc.text('TOTAL INCOME', col1X + 10, currentY + 16);
+  doc.text('TOTAL INCOME', col1X + 10, currentY + 18);
 
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(12.5);
-  doc.setTextColor(22, 101, 52);
-  doc.text(formatPdfCurrency(totalIncome), col1X + 10, currentY + 36);
+  doc.setFontSize(13);
+  doc.setTextColor(17, 17, 17); // Bold Black Amount
+  doc.text(formatPdfCurrencyExact(totalIncome), col1X + 10, currentY + 40);
 
-  // 2. TOTAL EXPENSE
+  // 2. TOTAL EXPENSE CARD
   const col2X = col1X + cardWidth + cardGap;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(254, 202, 202); // Red border
@@ -1492,19 +1369,19 @@ export const generateClosingBalancePdf = (
   doc.roundedRect(col2X, currentY, cardWidth, cardHeight, 3, 3, 'FD');
 
   doc.setFillColor(239, 68, 68);
-  doc.rect(col2X, currentY, cardWidth, 2.5, 'F');
+  doc.rect(col2X, currentY, cardWidth, 3, 'F');
 
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(7.5);
+  doc.setFontSize(8);
   doc.setTextColor(185, 28, 28);
-  doc.text('TOTAL EXPENSE', col2X + 10, currentY + 16);
+  doc.text('TOTAL EXPENSE', col2X + 10, currentY + 18);
 
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(12.5);
-  doc.setTextColor(185, 28, 28);
-  doc.text(formatPdfCurrency(totalExpense), col2X + 10, currentY + 36);
+  doc.setFontSize(13);
+  doc.setTextColor(17, 17, 17); // Bold Black Amount
+  doc.text(formatPdfCurrencyExact(totalExpense), col2X + 10, currentY + 40);
 
-  // 3. CLOSING BALANCE
+  // 3. CLOSING BALANCE CARD
   const col3X = col2X + cardWidth + cardGap;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(212, 175, 55); // Gold border
@@ -1512,212 +1389,187 @@ export const generateClosingBalancePdf = (
   doc.roundedRect(col3X, currentY, cardWidth, cardHeight, 3, 3, 'FD');
 
   doc.setFillColor(212, 175, 55);
-  doc.rect(col3X, currentY, cardWidth, 2.5, 'F');
+  doc.rect(col3X, currentY, cardWidth, 3, 'F');
 
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(7.5);
+  doc.setFontSize(8);
   doc.setTextColor(180, 130, 20);
-  doc.text('CLOSING BALANCE', col3X + 10, currentY + 16);
+  doc.text('CLOSING BALANCE', col3X + 10, currentY + 18);
 
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(12.5);
-  doc.setTextColor(180, 130, 20);
-  doc.text(formatPdfCurrency(closingBalance), col3X + 10, currentY + 36);
+  doc.setFontSize(13);
+  doc.setTextColor(17, 17, 17); // Bold Black Amount
+  doc.text(formatPdfCurrencyExact(closingBalance), col3X + 10, currentY + 40);
 
-  // --- SECTION: PROFIT DISTRIBUTION ---
-  currentY += cardHeight + 10;
-  const pCardW = (contentWidth - 10) / 2;
-  const pCardH = 38;
-
-  // Magnifique 75%
-  doc.setFillColor(254, 253, 248);
-  doc.setDrawColor(212, 175, 55);
-  doc.setLineWidth(0.8);
-  doc.roundedRect(leftMargin, currentY, pCardW, pCardH, 3, 3, 'FD');
-
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(7.5);
-  doc.setTextColor(180, 130, 20);
-  doc.text('PROFIT DISTRIBUTION • MAGNIFIQUE 75%', leftMargin + 10, currentY + 14);
-
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(20, 20, 20);
-  doc.text(formatPdfCurrency(profitMagnifique), leftMargin + 10, currentY + 30);
-
-  // Irshad + Ansari 25%
-  const pCol2X = leftMargin + pCardW + 10;
-  doc.setFillColor(250, 254, 250);
-  doc.setDrawColor(187, 247, 208);
-  doc.setLineWidth(0.8);
-  doc.roundedRect(pCol2X, currentY, pCardW, pCardH, 3, 3, 'FD');
-
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(7.5);
-  doc.setTextColor(22, 101, 52);
-  doc.text('PROFIT DISTRIBUTION • IRSHAD + ANSARI 25%', pCol2X + 10, currentY + 14);
-
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(20, 20, 20);
-  doc.text(formatPdfCurrency(profitPartners), pCol2X + 10, currentY + 30);
-
-  // --- SECTION: PARTNER OUTSTANDING & EXPENSES ---
-  currentY += pCardH + 14;
+  // ==================================================
+  // SECTION: PROFIT DISTRIBUTION
+  // ==================================================
+  currentY += cardHeight + 15;
 
   // Header Banner
   doc.setFillColor(26, 26, 26);
-  doc.roundedRect(leftMargin, currentY, contentWidth, 22, 2, 2, 'F');
+  doc.roundedRect(leftMargin, currentY, contentWidth, 24, 3, 3, 'F');
 
-  doc.setFillColor(212, 175, 55); // Gold indicator
-  doc.rect(leftMargin, currentY, 3.5, 22, 'F');
+  doc.setFillColor(212, 175, 55); // Gold indicator bar
+  doc.rect(leftMargin, currentY, 4, 24, 'F');
 
   doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(8.5);
+  doc.setFontSize(9);
   doc.setTextColor(255, 255, 255);
-  doc.text('PARTNER OUTSTANDING & EXPENSES', leftMargin + 12, currentY + 14.5);
+  doc.text('PROFIT DISTRIBUTION', leftMargin + 12, currentY + 16);
+
+  doc.setFont(fontFamily, 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(212, 175, 55);
+  doc.text('100% PROFIT ALLOCATION', leftMargin + contentWidth - 12, currentY + 16, { align: 'right' });
 
   currentY += 30;
-  const footerY = pageHeight - 48;
 
-  if (partnerSections.length === 0) {
-    // Clean Empty State
+  // ==================================================
+  // VERTICAL PARTNER LIST (5 CARDS)
+  // ==================================================
+  const partnerCardGap = 8;
+
+  // 1-4: MUSADDIQ, SATHISH, YOGESH, ANSARI
+  partner4List.forEach((partner) => {
+    const hasAdjustment = partner.netType !== 'NONE' && partner.netAdjustment > 0;
+    const cardHeight = hasAdjustment ? 52 : 38;
+
+    // Card Container
     doc.setFillColor(255, 255, 255);
-    doc.setDrawColor(230, 230, 230);
+    doc.setDrawColor(225, 225, 220);
     doc.setLineWidth(0.8);
-    doc.roundedRect(leftMargin, currentY, contentWidth, 36, 2, 2, 'FD');
+    doc.roundedRect(leftMargin, currentY, contentWidth, cardHeight, 3, 3, 'FD');
 
-    doc.setFont(fontFamily, 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(110, 110, 110);
-    doc.text('All partner accounts are fully settled or balanced for this period.', leftMargin + 14, currentY + 22);
-  } else {
-    // Render Separate Card for EACH Partner
-    for (const pSec of partnerSections) {
-      // Calculate dynamic card height
-      let linesCount = 0;
-      if (pSec.balanceMonths.length > 0) {
-        linesCount += 1 + pSec.balanceMonths.length + (pSec.showBalanceTotal ? 1 : 0);
-      }
-      if (pSec.expenseMonths.length > 0) {
-        if (pSec.balanceMonths.length > 0) linesCount += 0.4; // divider spacing
-        linesCount += 1 + pSec.expenseMonths.length + (pSec.showExpenseTotal ? 1 : 0);
-      }
+    // Left Gold Accent Stripe
+    doc.setFillColor(212, 175, 55);
+    doc.rect(leftMargin, currentY, 3.5, cardHeight, 'F');
 
-      // Height: Header bar (20pt) + content lines + padding
-      const cardContentH = 20 + Math.ceil(linesCount * 13) + 8;
+    // Line 1: PARTNER — SHARE % — Rs. [Base Profit]
+    const headerPrefix = `${partner.partnerName} — ${partner.percentageStr} — `;
+    doc.setFont(fontFamily, 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(30, 30, 30);
+    doc.text(headerPrefix, leftMargin + 14, currentY + 15);
 
-      // Page boundary check
-      if (currentY + cardContentH > footerY - 10) {
-        doc.addPage();
-        doc.setFillColor(254, 254, 252);
-        doc.rect(0, 0, pageWidth, pageHeight, 'F');
-        doc.setFillColor(26, 26, 26);
-        doc.rect(0, 0, pageWidth, 5, 'F');
-        currentY = 35;
-      }
+    const prefixWidth = doc.getTextWidth(headerPrefix);
+    doc.setFont(fontFamily, 'bold');
+    doc.setTextColor(17, 17, 17); // Bold Black Amount
+    doc.text(
+      formatPdfCurrencyExact(partner.baseProfit),
+      leftMargin + 14 + prefixWidth,
+      currentY + 15
+    );
 
-      // Card Container
-      doc.setFillColor(255, 255, 255);
-      doc.setDrawColor(220, 220, 218);
-      doc.setLineWidth(0.75);
-      doc.roundedRect(leftMargin, currentY, contentWidth, cardContentH, 2.5, 2.5, 'FD');
+    let lineY = currentY + 28;
 
-      // Card Header: Partner Name
-      doc.setFillColor(248, 248, 246);
-      doc.roundedRect(leftMargin, currentY, contentWidth, 20, 2.5, 2.5, 'F');
-      doc.setFillColor(212, 175, 55);
-      doc.rect(leftMargin, currentY, 3, 20, 'F');
-
-      doc.setFont(fontFamily, 'bold');
+    // Line 2: EXPENSE — Rs. [X] or BALANCE — Rs. [X] (Indented)
+    if (hasAdjustment) {
+      const adjPrefix = `    ${partner.netType} — `;
+      doc.setFont(fontFamily, 'normal');
       doc.setFontSize(8.5);
-      doc.setTextColor(20, 20, 20);
-      doc.text(pSec.partnerName, leftMargin + 10, currentY + 13.5);
+      doc.setTextColor(80, 80, 80);
+      doc.text(adjPrefix, leftMargin + 14, lineY);
 
-      let innerY = currentY + 30;
-
-      // Subsection A: BALANCE TO HOTEL / HOTEL TO PARTNER
-      if (pSec.balanceMonths.length > 0) {
-        doc.setFont(fontFamily, 'bold');
-        doc.setFontSize(7.5);
-        if (pSec.balanceDirection === 'to_hotel') {
-          doc.setTextColor(180, 130, 20);
-        } else {
-          doc.setTextColor(21, 128, 61);
-        }
-        doc.text(pSec.balanceLabel, leftMargin + 12, innerY);
-        innerY += 12;
-
-        pSec.balanceMonths.forEach((b) => {
-          doc.setFont(fontFamily, 'normal');
-          doc.setFontSize(8.5);
-          doc.setTextColor(50, 50, 50);
-          doc.text(b.monthName, leftMargin + 18, innerY);
-
-          doc.setFont(fontFamily, 'bold');
-          doc.setTextColor(20, 20, 20);
-          doc.text(formatPdfCurrency(b.amount), leftMargin + contentWidth - 16, innerY, { align: 'right' });
-          innerY += 13;
-        });
-
-        // Show TOTAL OUTSTANDING only if >= 2 months
-        if (pSec.showBalanceTotal) {
-          doc.setFont(fontFamily, 'bold');
-          doc.setFontSize(8.5);
-          if (pSec.balanceDirection === 'to_hotel') {
-            doc.setTextColor(180, 130, 20);
-          } else {
-            doc.setTextColor(21, 128, 61);
-          }
-          doc.text('TOTAL OUTSTANDING', leftMargin + 18, innerY);
-          doc.text(formatPdfCurrency(pSec.totalBalance), leftMargin + contentWidth - 16, innerY, { align: 'right' });
-          innerY += 14;
-        }
-      }
-
-      // Subsection B: EXPENSE BY PARTNER
-      if (pSec.expenseMonths.length > 0) {
-        if (pSec.balanceMonths.length > 0) {
-          doc.setDrawColor(235, 235, 235);
-          doc.setLineWidth(0.5);
-          doc.line(leftMargin + 10, innerY - 4, leftMargin + contentWidth - 10, innerY - 4);
-          innerY += 4;
-        }
-
-        doc.setFont(fontFamily, 'bold');
-        doc.setFontSize(7.5);
-        doc.setTextColor(185, 28, 28);
-        doc.text(pSec.expenseLabel, leftMargin + 12, innerY);
-        innerY += 12;
-
-        pSec.expenseMonths.forEach((e) => {
-          doc.setFont(fontFamily, 'normal');
-          doc.setFontSize(8.5);
-          doc.setTextColor(50, 50, 50);
-          doc.text(e.monthName, leftMargin + 18, innerY);
-
-          doc.setFont(fontFamily, 'bold');
-          doc.setTextColor(20, 20, 20);
-          doc.text(formatPdfCurrency(e.amount), leftMargin + contentWidth - 16, innerY, { align: 'right' });
-          innerY += 13;
-        });
-
-        // Show TOTAL EXPENSE only if >= 2 months
-        if (pSec.showExpenseTotal) {
-          doc.setFont(fontFamily, 'bold');
-          doc.setFontSize(8.5);
-          doc.setTextColor(185, 28, 28);
-          doc.text('TOTAL EXPENSE', leftMargin + 18, innerY);
-          doc.text(formatPdfCurrency(pSec.totalExpense), leftMargin + contentWidth - 16, innerY, { align: 'right' });
-          innerY += 14;
-        }
-      }
-
-      currentY += cardContentH + 8;
+      const adjWidth = doc.getTextWidth(adjPrefix);
+      doc.setFont(fontFamily, 'bold');
+      doc.setTextColor(17, 17, 17); // Bold Black Amount
+      doc.text(
+        formatPdfCurrencyExact(partner.netAdjustment),
+        leftMargin + 14 + adjWidth,
+        lineY
+      );
+      lineY += 13;
     }
-  }
 
-  // --- FOOTER & OFFICIAL SIGN-OFF ---
+    // Line 3: PARTNER PROFIT — Rs. [Final Profit] (Indented)
+    const profitPrefix = `    ${partner.partnerName} PROFIT — `;
+    doc.setFont(fontFamily, 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(180, 130, 20); // Warm Gold for label
+    doc.text(profitPrefix, leftMargin + 14, lineY);
+
+    const profitWidth = doc.getTextWidth(profitPrefix);
+    doc.setFont(fontFamily, 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(17, 17, 17); // Bold Black Amount
+    doc.text(
+      formatPdfCurrencyExact(partner.partnerProfit),
+      leftMargin + 14 + profitWidth,
+      lineY
+    );
+
+    currentY += cardHeight + partnerCardGap;
+  });
+
+  // 5: IRSHAD
+  const irshadCardHeight = 52;
+
+  // Card Container
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(225, 225, 220);
+  doc.setLineWidth(0.8);
+  doc.roundedRect(leftMargin, currentY, contentWidth, irshadCardHeight, 3, 3, 'FD');
+
+  // Left Gold Accent Stripe
+  doc.setFillColor(212, 175, 55);
+  doc.rect(leftMargin, currentY, 3.5, irshadCardHeight, 'F');
+
+  // Line 1: IRSHAD — 12.5% — Rs. [Share Amount]
+  const irHeaderPrefix = `IRSHAD — 12.5% — `;
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(30, 30, 30);
+  doc.text(irHeaderPrefix, leftMargin + 14, currentY + 15);
+
+  const irHeaderWidth = doc.getTextWidth(irHeaderPrefix);
+  doc.setFont(fontFamily, 'bold');
+  doc.setTextColor(17, 17, 17); // Bold Black Amount
+  doc.text(
+    formatPdfCurrencyExact(irshadShare),
+    leftMargin + 14 + irHeaderWidth,
+    currentY + 15
+  );
+
+  // Line 2: IRSHAD PROFIT — Rs. [Profit Amount] (Indented)
+  const irProfitPrefix = `    IRSHAD PROFIT — `;
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(180, 130, 20); // Warm Gold for label
+  doc.text(irProfitPrefix, leftMargin + 14, currentY + 28);
+
+  const irProfitWidth = doc.getTextWidth(irProfitPrefix);
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(17, 17, 17); // Bold Black Amount
+  doc.text(
+    formatPdfCurrencyExact(irshadProfit),
+    leftMargin + 14 + irProfitWidth,
+    currentY + 28
+  );
+
+  // Line 3: TOTAL OUTSTANDING — Rs. [Irshad Total Outstanding] (Indented)
+  const outPrefix = `    TOTAL OUTSTANDING — `;
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(80, 80, 80);
+  doc.text(outPrefix, leftMargin + 14, currentY + 41);
+
+  const outWidth = doc.getTextWidth(outPrefix);
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(17, 17, 17); // Bold Black Amount
+  doc.text(
+    formatPdfCurrencyExact(irshadOutstanding),
+    leftMargin + 14 + outWidth,
+    currentY + 41
+  );
+
+  currentY += irshadCardHeight + partnerCardGap;
+
+  // ==================================================
+  // FOOTER & OFFICIAL SIGN-OFF
+  // ==================================================
   const totalPages = doc.getNumberOfPages();
   const now = new Date();
   const dateFormatted = formatPdfDateMedium(now.toISOString().substring(0, 10));
@@ -1729,7 +1581,7 @@ export const generateClosingBalancePdf = (
 
   for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
     doc.setPage(pageNum);
-    const footerY = pageHeight - 48;
+    const footerY = pageHeight - 42;
 
     doc.setDrawColor(212, 175, 55); // Gold line
     doc.setLineWidth(0.75);
@@ -1738,22 +1590,22 @@ export const generateClosingBalancePdf = (
     doc.setFont(fontFamily, 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(120, 120, 120);
-    doc.text(`Generated on: ${dateFormatted}, ${timeFormatted}`, leftMargin, footerY + 15);
+    doc.text(`Generated on: ${dateFormatted}, ${timeFormatted}`, leftMargin, footerY + 14);
 
     doc.setFont(fontFamily, 'italic');
     doc.setFontSize(7.5);
     doc.setTextColor(180, 130, 20);
-    doc.text('Official Monthly Closing Record', leftMargin, footerY + 27);
+    doc.text('Official Monthly Closing Record', leftMargin, footerY + 25);
 
     doc.setFont(fontFamily, 'bold');
     doc.setFontSize(8);
     doc.setTextColor(40, 40, 40);
-    doc.text('Magnifique Business Management System', pageWidth - rightMargin, footerY + 15, { align: 'right' });
+    doc.text('Magnifique Business Management System', pageWidth - rightMargin, footerY + 14, { align: 'right' });
 
     doc.setFont(fontFamily, 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(130, 130, 130);
-    doc.text(`Page ${pageNum} of ${totalPages}`, pageWidth - rightMargin, footerY + 27, { align: 'right' });
+    doc.text(`Page ${pageNum} of ${totalPages}`, pageWidth - rightMargin, footerY + 25, { align: 'right' });
   }
 
   return doc;

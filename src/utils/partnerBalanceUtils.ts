@@ -5,7 +5,12 @@ import {
   PartnerSettlement,
   PartnerSettlementRow,
   PartnerCurrentBalance,
+  AccountMonthRow,
 } from '../types';
+import {
+  calculateMonthSummary,
+  getExpenseAccountingMonth,
+} from './accountBalanceUtils';
 
 export const OFFICIAL_PARTNER_NAMES = [
   'IRSHAD',
@@ -136,6 +141,23 @@ export function isSettlementForPartner(
   const sName = s.partnerName || s.partner_name || s.name || s.partner;
   const sId = s.partnerId || s.partner_id;
   return matchPartner(normName, partnerId, sName, sId, idToNameMap);
+}
+
+/**
+ * Extracts authoritative accounting month (YYYY-MM) from a settlement record.
+ * Prioritizes settlement_month over settlement_date / date.
+ */
+export function getSettlementMonthKey(s: any): string {
+  if (!s) return '';
+  const m = s.settlementMonth || s.settlement_month;
+  if (m && String(m).length >= 7) {
+    return String(m).substring(0, 7);
+  }
+  const d = s.date || s.settlement_date;
+  if (d && String(d).length >= 7) {
+    return String(d).substring(0, 7);
+  }
+  return '';
 }
 
 /**
@@ -275,6 +297,20 @@ export function getEffectivePartners(
  *   - cutoffDate: Calculate balances up to this date inclusive (YYYY-MM-DD). If omitted, calculates up to the latest date.
  *   - startDate: When calculating for a specific period/month, specify start date to separate opening balance from period activity.
  */
+/**
+ * SINGLE UNIFIED SOURCE OF TRUTH for partner balances throughout the entire application.
+ * 
+ * STRICT ACCOUNTING MONTH ISOLATION:
+ * For every partner independently within a specific accounting month, calculates:
+ *   month partner net balance =
+ *     income balance assigned to that partner in this month
+ *     - expenses paid by that partner in this month
+ *     - partner settlements paid to hotel for this month
+ *     + settlements paid by hotel to partner for this month
+ * 
+ * Closed months are archived (with IRSHAD closed net stored in irshad_wallet_entries).
+ * No previous-month partner balance leaks into a new accounting month.
+ */
 export function calculatePartnerNetBalances(
   incomeRecords: IncomeRecord[],
   expenseRecords: ExpenseRecord[],
@@ -283,8 +319,16 @@ export function calculatePartnerNetBalances(
   options?: {
     cutoffDate?: string;
     startDate?: string;
+    monthStr?: string;
+    accountMonths?: AccountMonthRow[];
   }
 ): PartnerNetBalance[] {
+  const targetMonth =
+    options?.monthStr ||
+    (options?.startDate ? options.startDate.substring(0, 7) : '') ||
+    (options?.cutoffDate ? options.cutoffDate.substring(0, 7) : '') ||
+    new Date().toISOString().substring(0, 7);
+
   const effectivePartners = getEffectivePartners(
     partners,
     incomeRecords,
@@ -300,128 +344,94 @@ export function calculatePartnerNetBalances(
     }
   });
 
-  // Collect all dates present in the system
-  const dateSet = new Set<string>();
-  incomeRecords.forEach((r) => {
-    if (r.date) dateSet.add(r.date);
-  });
-  expenseRecords.forEach((r) => {
-    if (r.date) dateSet.add(r.date);
-  });
-  partnerSettlements.forEach((s) => {
-    const d = s.date || s.settlement_date;
-    if (d) dateSet.add(d);
-  });
-
-  if (options?.cutoffDate) {
-    dateSet.add(options.cutoffDate);
-  }
-  if (options?.startDate) {
-    dateSet.add(options.startDate);
-  }
-
-  const allDates = Array.from(dateSet).filter(Boolean).sort((a, b) => a.localeCompare(b));
-
   const cutoff = options?.cutoffDate || null;
-  const start = options?.startDate || null;
 
-  // Filter dates up to cutoffDate
-  const relevantDates = cutoff ? allDates.filter((d) => d <= cutoff) : allDates;
+  // Strict month-isolated filtering
+  const monthIncome = incomeRecords.filter((r) => {
+    if (!r.date || !r.date.startsWith(targetMonth)) return false;
+    if (cutoff && r.date > cutoff) return false;
+    return true;
+  });
+
+  const monthExpenses = expenseRecords.filter((r) => {
+    const accM = getExpenseAccountingMonth(r);
+    if (accM !== targetMonth) return false;
+    if (cutoff && r.date && r.date > cutoff) return false;
+    return true;
+  });
+
+  const monthSettlements = partnerSettlements.filter((s: any) => {
+    const sMonth = getSettlementMonthKey(s);
+    if (sMonth !== targetMonth) return false;
+    const rawMonth = s.settlementMonth || s.settlement_month;
+    if (cutoff && !rawMonth) {
+      const sDate = s.date || s.settlement_date;
+      if (sDate && sDate > cutoff) return false;
+    }
+    return true;
+  });
 
   return effectivePartners.map((partner) => {
-    let runningBalance = 0;
-    let openingBalance = 0;
-    let periodIncomeBalance = 0;
-    let periodExpenses = 0;
-    let periodSettlementsToHotel = 0;
-    let periodSettlementsFromHotel = 0;
+    // 1. Income Balance assigned to this partner in this month
+    const incomeBalance = monthIncome
+      .filter((inc) => isIncomeAssignedToPartner(inc, partner.name, partner.id, idToNameMap))
+      .reduce((sum, inc) => {
+        const bal = Number(inc.balance) || 0;
+        return sum + (bal > 0 ? bal : 0);
+      }, 0);
 
-    for (const d of relevantDates) {
-      const isBeforeStart = start ? d < start : false;
+    // 2. Expenses paid by this partner in this month
+    const expensesPaid = monthExpenses
+      .filter((exp) => isExpensePaidByPartner(exp, partner.name, partner.id, idToNameMap))
+      .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
 
-      // 1. New income balance assigned to that partner on date d
-      const dayIncomeBalance = incomeRecords
-        .filter((inc) => inc.date === d && isIncomeAssignedToPartner(inc, partner.name, partner.id, idToNameMap))
-        .reduce((sum, inc) => {
-          const bal = Number(inc.balance) || 0;
-          return sum + (bal > 0 ? bal : 0);
-        }, 0);
+    // 3. Partner settlements for this month
+    let settlementsToHotel = 0;
+    let settlementsFromHotel = 0;
 
-      // 2. Expenses paid by that partner on date d
-      const dayExpenses = expenseRecords
-        .filter((exp) => exp.date === d && isExpensePaidByPartner(exp, partner.name, partner.id, idToNameMap))
-        .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+    monthSettlements
+      .filter((s) => isSettlementForPartner(s, partner.name, partner.id, idToNameMap))
+      .forEach((s) => {
+        const amt = Number(s.amount) || 0;
+        if (getSettlementDirection(s) === 'from_hotel') {
+          settlementsFromHotel += amt;
+        } else {
+          settlementsToHotel += amt;
+        }
+      });
 
-      // 3. Partner settlements on date d
-      let daySettlementsToHotel = 0;
-      let daySettlementsFromHotel = 0;
-
-      partnerSettlements
-        .filter((s) => {
-          const sDate = s.date || s.settlement_date;
-          return sDate === d && isSettlementForPartner(s, partner.name, partner.id, idToNameMap);
-        })
-        .forEach((s) => {
-          const amt = Number(s.amount) || 0;
-          if (getSettlementDirection(s) === 'from_hotel') {
-            daySettlementsFromHotel += amt;
-          } else {
-            daySettlementsToHotel += amt;
-          }
-        });
-
-      // Daily Net update:
-      // + new income balance assigned to partner
-      // - expenses paid by partner
-      // - settlements paid to hotel
-      // + settlements paid by hotel to partner
-      runningBalance =
-        runningBalance +
-        dayIncomeBalance -
-        dayExpenses -
-        daySettlementsToHotel +
-        daySettlementsFromHotel;
-
-      // Track opening balance and period deltas
-      if (isBeforeStart) {
-        openingBalance = runningBalance;
-      } else {
-        periodIncomeBalance += dayIncomeBalance;
-        periodExpenses += dayExpenses;
-        periodSettlementsToHotel += daySettlementsToHotel;
-        periodSettlementsFromHotel += daySettlementsFromHotel;
-      }
-    }
-
-    const displayInfo = formatPartnerDisplay(partner.name, runningBalance);
+    const netBalance = incomeBalance - expensesPaid - settlementsToHotel + settlementsFromHotel;
+    const displayInfo = formatPartnerDisplay(partner.name, netBalance);
 
     return {
       partnerId: partner.id || partner.name,
       partnerName: partner.name,
-      netBalance: runningBalance,
+      netBalance,
       displayLabel: displayInfo.label,
       displayAmount: displayInfo.amount,
       isZero: displayInfo.isZero,
       direction: displayInfo.direction,
-      openingBalance,
-      incomeBalanceAdded: periodIncomeBalance,
-      expensesPaid: periodExpenses,
-      settlementsToHotel: periodSettlementsToHotel,
-      settlementsFromHotel: periodSettlementsFromHotel,
+      openingBalance: 0,
+      incomeBalanceAdded: incomeBalance,
+      expensesPaid,
+      settlementsToHotel,
+      settlementsFromHotel,
     };
   });
 }
 
 /**
- * Calculates running partner net balances as of a specific calendar date (carrying forward from all history).
+ * Calculates running partner net balances as of a specific calendar date (strictly within dateStr's accounting month).
  */
 export function calculatePartnerBalancesForDate(
   dateStr: string,
   incomeRecords: IncomeRecord[],
   expenseRecords: ExpenseRecord[],
   partnerSettlements: any[] = [],
-  partners: Partner[] = []
+  partners: Partner[] = [],
+  accountMonths: AccountMonthRow[] = []
 ): PartnerNetBalance[] {
+  const monthStr = dateStr.substring(0, 7);
   return calculatePartnerNetBalances(
     incomeRecords,
     expenseRecords,
@@ -429,21 +439,24 @@ export function calculatePartnerBalancesForDate(
     partners,
     {
       cutoffDate: dateStr,
-      startDate: dateStr,
+      startDate: `${monthStr}-01`,
+      monthStr,
+      accountMonths,
     }
   );
 }
 
 /**
  * Calculates running partner net balances for a specific calendar month (YYYY-MM),
- * carrying forward continuously from previous months.
+ * strictly isolated to that accounting month.
  */
 export function calculatePartnerBalancesForMonth(
   monthStr: string,
   incomeRecords: IncomeRecord[],
   expenseRecords: ExpenseRecord[],
   partnerSettlements: any[] = [],
-  partners: Partner[] = []
+  partners: Partner[] = [],
+  accountMonths: AccountMonthRow[] = []
 ): PartnerNetBalance[] {
   return calculatePartnerNetBalances(
     incomeRecords,
@@ -453,6 +466,8 @@ export function calculatePartnerBalancesForMonth(
     {
       cutoffDate: `${monthStr}-31`,
       startDate: `${monthStr}-01`,
+      monthStr,
+      accountMonths,
     }
   );
 }
@@ -471,4 +486,194 @@ export function toPartnerCurrentBalances(
     balance_to_hotel: b.netBalance > 0 ? b.netBalance : 0,
     expenses_by_them: b.netBalance < 0 ? Math.abs(b.netBalance) : 0,
   }));
+}
+
+export interface ClosingPartnerProfitItem {
+  partnerName: string;
+  sharePercent: number;
+  percentageStr: string;
+  baseProfit: number;
+  incomeBalance: number;
+  balanceToHotel: number;
+  expensesByThem: number;
+  settledToHotel: number;
+  settledFromHotel: number;
+  settledNet: number;
+  netType: 'EXPENSE' | 'BALANCE' | 'NONE';
+  netAdjustment: number;
+  partnerProfit: number;
+  isIrshad: boolean;
+  irshadTotalOutstanding?: number;
+}
+
+export interface ClosingProfitDistributionResult {
+  monthStr: string;
+  totalIncome: number;
+  totalExpense: number;
+  openingBalance: number;
+  closingBalance: number;
+  isClosed: boolean;
+  closedAt: string | null;
+  partners: ClosingPartnerProfitItem[];
+}
+
+/**
+ * AUTHORITATIVE CALCULATION FOR CLOSING BALANCE & PROFIT DISTRIBUTION
+ * 
+ * Used identically across:
+ * - Closing Balance Screen
+ * - Closing Balance PDF
+ * - Month Closing confirmation & settlement
+ * 
+ * Rules:
+ * 1. 5 Official Partners:
+ *    - MUSADDIQ (25%)
+ *    - SATHISH (25%)
+ *    - YOGESH (25%)
+ *    - ANSARI (12.5%)
+ *    - IRSHAD (12.5%)
+ * 2. Net Partner Adjustment for MUSADDIQ, SATHISH, YOGESH, ANSARI:
+ *    - Compare balance_to_hotel vs expenses_by_them
+ *    - If EXPENSE > BALANCE: netDifference = expense - balance, netType = 'EXPENSE', profit = baseProfit + netDifference
+ *    - If BALANCE > EXPENSE: netDifference = balance - expense, netType = 'BALANCE', profit = baseProfit - netDifference
+ *    - If equal: netDifference = 0, netType = 'NONE', profit = baseProfit
+ * 3. IRSHAD Exception:
+ *    - Profit = baseProfit (12.5% allocation)
+ *    - Total Outstanding = balance_to_hotel (incomeBalance) - expenses_by_them - settled amount
+ */
+export function calculateClosingProfitDistribution(
+  monthStr: string,
+  incomeRecords: IncomeRecord[] = [],
+  expenseRecords: ExpenseRecord[] = [],
+  accountMonths: AccountMonthRow[] = [],
+  partnerSettlements: PartnerSettlement[] = [],
+  partners: Partner[] = []
+): ClosingProfitDistributionResult {
+  const monthSummary = calculateMonthSummary(
+    monthStr,
+    incomeRecords,
+    expenseRecords,
+    accountMonths,
+    partnerSettlements
+  );
+
+  const monthIncome = incomeRecords.filter((r) => r.date && r.date.startsWith(monthStr));
+  const monthExpenses = expenseRecords.filter((r) => getExpenseAccountingMonth(r) === monthStr);
+
+  const totalIncome = monthSummary.totalIncome;
+  const totalExpense = monthSummary.totalExpense;
+  const openingBalance = monthSummary.openingBalance;
+  const closingBalance = monthSummary.closingBalance;
+  const isClosed = monthSummary.isClosed;
+  const closedAt = monthSummary.closedAt || null;
+
+  const partnerConfigs: { name: string; sharePercent: number; percentageStr: string; isIrshad: boolean }[] = [
+    { name: 'MUSADDIQ', sharePercent: 0.25, percentageStr: '25%', isIrshad: false },
+    { name: 'SATHISH', sharePercent: 0.25, percentageStr: '25%', isIrshad: false },
+    { name: 'YOGESH', sharePercent: 0.25, percentageStr: '25%', isIrshad: false },
+    { name: 'ANSARI', sharePercent: 0.125, percentageStr: '12.5%', isIrshad: false },
+    { name: 'IRSHAD', sharePercent: 0.125, percentageStr: '12.5%', isIrshad: true },
+  ];
+
+  const calculatedPartners: ClosingPartnerProfitItem[] = partnerConfigs.map((cfg) => {
+    const normName = normalizePartnerName(cfg.name);
+    const pObj = (partners || []).find((p) => normalizePartnerName(p.name) === normName);
+    const pId = pObj?.id ? String(pObj.id) : '';
+
+    // 1. Income Balance assigned to this partner in this month
+    const incomeBalance = monthIncome
+      .filter((inc) => isIncomeAssignedToPartner(inc, normName, pId))
+      .reduce((sum, inc) => sum + (Number(inc.balance) > 0 ? Number(inc.balance) : 0), 0);
+
+    // 2. Expenses paid by this partner in this month
+    const expensesByThem = monthExpenses
+      .filter((exp) => isExpensePaidByPartner(exp, normName, pId))
+      .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+
+    // 3. Partner settlements for this month
+    const settlements = (partnerSettlements || []).filter((s) => {
+      if (!isSettlementForPartner(s, normName, pId)) return false;
+      return getSettlementMonthKey(s) === monthStr;
+    });
+
+    const settledToHotel = settlements
+      .filter((s) => getSettlementDirection(s) === 'to_hotel')
+      .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+    const settledFromHotel = settlements
+      .filter((s) => getSettlementDirection(s) === 'from_hotel')
+      .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+
+    const netBalOwed = incomeBalance - settledToHotel + settledFromHotel;
+    const balanceToHotel = netBalOwed > 0 ? netBalOwed : 0;
+    const settledNet = settledToHotel - settledFromHotel;
+
+    const baseProfit = closingBalance * cfg.sharePercent;
+
+    if (cfg.isIrshad) {
+      const irshadTotalOutstanding = incomeBalance - expensesByThem - settledNet;
+      return {
+        partnerName: cfg.name,
+        sharePercent: cfg.sharePercent,
+        percentageStr: cfg.percentageStr,
+        baseProfit,
+        incomeBalance,
+        balanceToHotel,
+        expensesByThem,
+        settledToHotel,
+        settledFromHotel,
+        settledNet,
+        netType: 'NONE',
+        netAdjustment: 0,
+        partnerProfit: baseProfit,
+        isIrshad: true,
+        irshadTotalOutstanding,
+      };
+    }
+
+    let netType: 'EXPENSE' | 'BALANCE' | 'NONE' = 'NONE';
+    let netAdjustment = 0;
+    let partnerProfit = baseProfit;
+
+    if (expensesByThem > balanceToHotel) {
+      netType = 'EXPENSE';
+      netAdjustment = expensesByThem - balanceToHotel;
+      partnerProfit = baseProfit + netAdjustment;
+    } else if (balanceToHotel > expensesByThem) {
+      netType = 'BALANCE';
+      netAdjustment = balanceToHotel - expensesByThem;
+      partnerProfit = baseProfit - netAdjustment;
+    } else {
+      netType = 'NONE';
+      netAdjustment = 0;
+      partnerProfit = baseProfit;
+    }
+
+    return {
+      partnerName: cfg.name,
+      sharePercent: cfg.sharePercent,
+      percentageStr: cfg.percentageStr,
+      baseProfit,
+      incomeBalance,
+      balanceToHotel,
+      expensesByThem,
+      settledToHotel,
+      settledFromHotel,
+      settledNet,
+      netType,
+      netAdjustment,
+      partnerProfit,
+      isIrshad: false,
+    };
+  });
+
+  return {
+    monthStr,
+    totalIncome,
+    totalExpense,
+    openingBalance,
+    closingBalance,
+    isClosed,
+    closedAt,
+    partners: calculatedPartners,
+  };
 }
