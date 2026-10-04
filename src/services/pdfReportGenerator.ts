@@ -1236,18 +1236,50 @@ export const generateClosingBalancePdf = (
 
   const monthFormatted = formatPdfMonth(monthStr); // e.g. "September 2026"
 
-  const musaddiq = closingData.partners.find((p) => p.partnerName === 'MUSADDIQ')!;
-  const sathish = closingData.partners.find((p) => p.partnerName === 'SATHISH')!;
-  const yogesh = closingData.partners.find((p) => p.partnerName === 'YOGESH')!;
-  const ansari = closingData.partners.find((p) => p.partnerName === 'ANSARI')!;
-  const irshadStats = closingData.partners.find((p) => p.partnerName === 'IRSHAD')!;
+  const musaddiq = closingData.partners.find((p) => p.partnerName === 'MUSADDIQ');
+  const sathish = closingData.partners.find((p) => p.partnerName === 'SATHISH');
+  const yogesh = closingData.partners.find((p) => p.partnerName === 'YOGESH');
+  const ansari = closingData.partners.find((p) => p.partnerName === 'ANSARI');
+  const irshad = closingData.partners.find((p) => p.partnerName === 'IRSHAD');
 
-  const partner4List = [musaddiq, sathish, yogesh, ansari].filter(Boolean);
+  // Profit Groups:
+  // MAGNIFIQUE (MUSADDIQ + SATHISH + YOGESH) = 75%
+  const magnifiqueProfit =
+    (musaddiq?.baseProfit || 0) + (sathish?.baseProfit || 0) + (yogesh?.baseProfit || 0);
 
-  // IRSHAD: 12.5% share & business profit settlement
-  // IRSHAD PROFIT = 12.5% profit allocation
-  const irshadShare = irshadStats.baseProfit;
-  const irshadProfit = irshadStats.partnerProfit;
+  // IRSHAD + ANSARI = 25%
+  const irshadAnsariProfit =
+    (ansari?.baseProfit || 0) + (irshad?.baseProfit || 0);
+
+  // Partner Net Balances for Closed Month
+  const partnerOrder = ['MUSADDIQ', 'SATHISH', 'YOGESH', 'ANSARI', 'IRSHAD'];
+  const partnerNetList = partnerOrder.map((name) => {
+    const p = closingData.partners.find((item) => item.partnerName === name);
+    const balance = p?.balanceToHotel !== undefined ? p.balanceToHotel : (p?.incomeBalance || 0);
+    const expense = p?.expensesByThem || 0;
+
+    let netText = '';
+    let direction: 'to_hotel' | 'to_partner' | 'zero' = 'zero';
+
+    if (balance > expense) {
+      const net = balance - expense;
+      netText = `${name} TO HOTEL — ${formatPdfCurrencyExact(net)}`;
+      direction = 'to_hotel';
+    } else if (expense > balance) {
+      const net = expense - balance;
+      netText = `HOTEL TO ${name} — ${formatPdfCurrencyExact(net)}`;
+      direction = 'to_partner';
+    } else {
+      netText = `${name} — Rs. 0`;
+      direction = 'zero';
+    }
+
+    return {
+      partnerName: name,
+      netText,
+      direction,
+    };
+  });
 
   // Initialize jsPDF (Strictly 1-page A4 Portrait: 595.28 pt x 841.89 pt)
   const doc = new jsPDF({
@@ -1397,153 +1429,135 @@ export const generateClosingBalancePdf = (
   doc.text(formatPdfCurrencyExact(closingBalance), col3X + 10, currentY + 40);
 
   // ==================================================
-  // SECTION: PROFIT DISTRIBUTION
+  // SECTION: PROFIT DISTRIBUTION (2 PROFIT-GROUP CARDS)
   // ==================================================
-  currentY += cardHeight + 15;
+  currentY += cardHeight + 14;
 
   // Header Banner
   doc.setFillColor(26, 26, 26);
-  doc.roundedRect(leftMargin, currentY, contentWidth, 24, 3, 3, 'F');
+  doc.roundedRect(leftMargin, currentY, contentWidth, 22, 3, 3, 'F');
 
   doc.setFillColor(212, 175, 55); // Gold indicator bar
-  doc.rect(leftMargin, currentY, 4, 24, 'F');
+  doc.rect(leftMargin, currentY, 4, 22, 'F');
 
   doc.setFont(fontFamily, 'bold');
   doc.setFontSize(9);
   doc.setTextColor(255, 255, 255);
-  doc.text('PROFIT DISTRIBUTION', leftMargin + 12, currentY + 16);
+  doc.text('PROFIT DISTRIBUTION', leftMargin + 12, currentY + 15);
 
   doc.setFont(fontFamily, 'normal');
   doc.setFontSize(8);
   doc.setTextColor(212, 175, 55);
-  doc.text('100% PROFIT ALLOCATION', leftMargin + contentWidth - 12, currentY + 16, { align: 'right' });
+  doc.text('100% PROFIT ALLOCATION', leftMargin + contentWidth - 12, currentY + 15, { align: 'right' });
 
-  currentY += 30;
+  currentY += 28;
+
+  // Two columns/cards for profit groups
+  const groupGap = 12;
+  const groupCardWidth = (contentWidth - groupGap) / 2;
+  const groupCardHeight = 50;
+
+  // 1. MAGNIFIQUE (75%)
+  const g1X = leftMargin;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(225, 225, 220);
+  doc.setLineWidth(0.8);
+  doc.roundedRect(g1X, currentY, groupCardWidth, groupCardHeight, 3, 3, 'FD');
+
+  doc.setFillColor(212, 175, 55);
+  doc.rect(g1X, currentY, 3.5, groupCardHeight, 'F');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(20, 20, 20);
+  doc.text('MAGNIFIQUE', g1X + 12, currentY + 18);
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(17, 17, 17);
+  doc.text(
+    `${formatPdfCurrencyExact(magnifiqueProfit)} — 75%`,
+    g1X + 12,
+    currentY + 38
+  );
+
+  // 2. IRSHAD + ANSARI (25%)
+  const g2X = g1X + groupCardWidth + groupGap;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(225, 225, 220);
+  doc.setLineWidth(0.8);
+  doc.roundedRect(g2X, currentY, groupCardWidth, groupCardHeight, 3, 3, 'FD');
+
+  doc.setFillColor(212, 175, 55);
+  doc.rect(g2X, currentY, 3.5, groupCardHeight, 'F');
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(20, 20, 20);
+  doc.text('IRSHAD + ANSARI', g2X + 12, currentY + 18);
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(17, 17, 17);
+  doc.text(
+    `${formatPdfCurrencyExact(irshadAnsariProfit)} — 25%`,
+    g2X + 12,
+    currentY + 38
+  );
+
+  currentY += groupCardHeight + 16;
 
   // ==================================================
-  // VERTICAL PARTNER LIST (5 CARDS)
+  // SECTION: PARTNER NET BALANCES
   // ==================================================
-  const partnerCardGap = 8;
+  // Header Banner
+  doc.setFillColor(26, 26, 26);
+  doc.roundedRect(leftMargin, currentY, contentWidth, 22, 3, 3, 'F');
 
-  // 1-4: MUSADDIQ, SATHISH, YOGESH, ANSARI
-  partner4List.forEach((partner) => {
-    const hasAdjustment = partner.netType !== 'NONE' && partner.netAdjustment > 0;
-    const cardHeight = hasAdjustment ? 52 : 38;
+  doc.setFillColor(212, 175, 55); // Gold indicator bar
+  doc.rect(leftMargin, currentY, 4, 22, 'F');
 
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(255, 255, 255);
+  doc.text('PARTNER NET BALANCES', leftMargin + 12, currentY + 15);
+
+  doc.setFont(fontFamily, 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(212, 175, 55);
+  doc.text('CLOSED MONTH POSITION', leftMargin + contentWidth - 12, currentY + 15, { align: 'right' });
+
+  currentY += 28;
+
+  // 5 Partner Net Balance Cards
+  const netCardHeight = 34;
+  const netCardGap = 6;
+
+  partnerNetList.forEach((partner) => {
     // Card Container
     doc.setFillColor(255, 255, 255);
     doc.setDrawColor(225, 225, 220);
     doc.setLineWidth(0.8);
-    doc.roundedRect(leftMargin, currentY, contentWidth, cardHeight, 3, 3, 'FD');
+    doc.roundedRect(leftMargin, currentY, contentWidth, netCardHeight, 3, 3, 'FD');
 
-    // Left Gold Accent Stripe
-    doc.setFillColor(212, 175, 55);
-    doc.rect(leftMargin, currentY, 3.5, cardHeight, 'F');
-
-    // Line 1: PARTNER — SHARE % — Rs. [Base Profit]
-    const headerPrefix = `${partner.partnerName} — ${partner.percentageStr} — `;
-    doc.setFont(fontFamily, 'bold');
-    doc.setFontSize(9.5);
-    doc.setTextColor(30, 30, 30);
-    doc.text(headerPrefix, leftMargin + 14, currentY + 15);
-
-    const prefixWidth = doc.getTextWidth(headerPrefix);
-    doc.setFont(fontFamily, 'bold');
-    doc.setTextColor(17, 17, 17); // Bold Black Amount
-    doc.text(
-      formatPdfCurrencyExact(partner.baseProfit),
-      leftMargin + 14 + prefixWidth,
-      currentY + 15
-    );
-
-    let lineY = currentY + 28;
-
-    // Line 2: EXPENSE — Rs. [X] or BALANCE — Rs. [X] (Indented)
-    if (hasAdjustment) {
-      const adjPrefix = `    ${partner.netType} — `;
-      doc.setFont(fontFamily, 'normal');
-      doc.setFontSize(8.5);
-      doc.setTextColor(80, 80, 80);
-      doc.text(adjPrefix, leftMargin + 14, lineY);
-
-      const adjWidth = doc.getTextWidth(adjPrefix);
-      doc.setFont(fontFamily, 'bold');
-      doc.setTextColor(17, 17, 17); // Bold Black Amount
-      doc.text(
-        formatPdfCurrencyExact(partner.netAdjustment),
-        leftMargin + 14 + adjWidth,
-        lineY
-      );
-      lineY += 13;
+    // Left Accent Stripe
+    if (partner.direction === 'to_hotel') {
+      doc.setFillColor(212, 175, 55); // Warm Gold
+    } else if (partner.direction === 'to_partner') {
+      doc.setFillColor(34, 197, 94); // Green
+    } else {
+      doc.setFillColor(180, 180, 180); // Gray
     }
+    doc.rect(leftMargin, currentY, 3.5, netCardHeight, 'F');
 
-    // Line 3: PARTNER PROFIT — Rs. [Final Profit] (Indented)
-    const profitPrefix = `    ${partner.partnerName} PROFIT — `;
+    // Single Clean Net Position Line
     doc.setFont(fontFamily, 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(180, 130, 20); // Warm Gold for label
-    doc.text(profitPrefix, leftMargin + 14, lineY);
+    doc.setFontSize(10);
+    doc.setTextColor(30, 30, 30);
+    doc.text(partner.netText, leftMargin + 14, currentY + 21);
 
-    const profitWidth = doc.getTextWidth(profitPrefix);
-    doc.setFont(fontFamily, 'bold');
-    doc.setFontSize(9.5);
-    doc.setTextColor(17, 17, 17); // Bold Black Amount
-    doc.text(
-      formatPdfCurrencyExact(partner.partnerProfit),
-      leftMargin + 14 + profitWidth,
-      lineY
-    );
-
-    currentY += cardHeight + partnerCardGap;
+    currentY += netCardHeight + netCardGap;
   });
-
-  // 5: IRSHAD
-  const irshadCardHeight = 38;
-
-  // Card Container
-  doc.setFillColor(255, 255, 255);
-  doc.setDrawColor(225, 225, 220);
-  doc.setLineWidth(0.8);
-  doc.roundedRect(leftMargin, currentY, contentWidth, irshadCardHeight, 3, 3, 'FD');
-
-  // Left Gold Accent Stripe
-  doc.setFillColor(212, 175, 55);
-  doc.rect(leftMargin, currentY, 3.5, irshadCardHeight, 'F');
-
-  // Line 1: IRSHAD — 12.5% — Rs. [Share Amount]
-  const irHeaderPrefix = `IRSHAD — 12.5% — `;
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(30, 30, 30);
-  doc.text(irHeaderPrefix, leftMargin + 14, currentY + 15);
-
-  const irHeaderWidth = doc.getTextWidth(irHeaderPrefix);
-  doc.setFont(fontFamily, 'bold');
-  doc.setTextColor(17, 17, 17); // Bold Black Amount
-  doc.text(
-    formatPdfCurrencyExact(irshadShare),
-    leftMargin + 14 + irHeaderWidth,
-    currentY + 15
-  );
-
-  // Line 2: IRSHAD PROFIT — Rs. [Profit Amount] (Indented)
-  const irProfitPrefix = `    IRSHAD PROFIT — `;
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(180, 130, 20); // Warm Gold for label
-  doc.text(irProfitPrefix, leftMargin + 14, currentY + 28);
-
-  const irProfitWidth = doc.getTextWidth(irProfitPrefix);
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(17, 17, 17); // Bold Black Amount
-  doc.text(
-    formatPdfCurrencyExact(irshadProfit),
-    leftMargin + 14 + irProfitWidth,
-    currentY + 28
-  );
-
-  currentY += irshadCardHeight + partnerCardGap;
 
   // ==================================================
   // FOOTER & OFFICIAL SIGN-OFF
