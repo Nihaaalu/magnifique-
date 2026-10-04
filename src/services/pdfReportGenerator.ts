@@ -1246,10 +1246,8 @@ export const generateClosingBalancePdf = (
 
   // IRSHAD: 12.5% share & business profit settlement
   // IRSHAD PROFIT = 12.5% profit allocation
-  // IRSHAD OUTSTANDING = IRSHAD balance_to_hotel (incomeBalance) - IRSHAD expenses_by_them - IRSHAD settled amount
   const irshadShare = irshadStats.baseProfit;
   const irshadProfit = irshadStats.partnerProfit;
-  const irshadOutstanding = irshadStats.irshadTotalOutstanding || 0;
 
   // Initialize jsPDF (Strictly 1-page A4 Portrait: 595.28 pt x 841.89 pt)
   const doc = new jsPDF({
@@ -1500,7 +1498,7 @@ export const generateClosingBalancePdf = (
   });
 
   // 5: IRSHAD
-  const irshadCardHeight = 52;
+  const irshadCardHeight = 38;
 
   // Card Container
   doc.setFillColor(255, 255, 255);
@@ -1543,23 +1541,6 @@ export const generateClosingBalancePdf = (
     formatPdfCurrencyExact(irshadProfit),
     leftMargin + 14 + irProfitWidth,
     currentY + 28
-  );
-
-  // Line 3: TOTAL OUTSTANDING — Rs. [Irshad Total Outstanding] (Indented)
-  const outPrefix = `    TOTAL OUTSTANDING — `;
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(80, 80, 80);
-  doc.text(outPrefix, leftMargin + 14, currentY + 41);
-
-  const outWidth = doc.getTextWidth(outPrefix);
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(17, 17, 17); // Bold Black Amount
-  doc.text(
-    formatPdfCurrencyExact(irshadOutstanding),
-    leftMargin + 14 + outWidth,
-    currentY + 41
   );
 
   currentY += irshadCardHeight + partnerCardGap;

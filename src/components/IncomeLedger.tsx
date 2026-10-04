@@ -7,6 +7,7 @@ import {
   PaymentStatus,
   MealPlan,
   MealCombination,
+  AccountMonthRow,
 } from '../types';
 import { calculatePartnerNetBalances } from '../utils/partnerBalanceUtils';
 import {
@@ -30,6 +31,8 @@ import {
   formatDateDisplay,
   getTodayDateString,
 } from '../utils/formatters';
+import { isMonthClosed } from '../utils/accountBalanceUtils';
+import { formatPdfMonth } from '../services/pdfReportGenerator';
 import { useSwipeNavigation } from '../utils/useSwipeNavigation';
 import {
   ChevronLeft,
@@ -37,12 +40,14 @@ import {
   Trash2,
   Edit2,
   X,
+  Lock,
 } from 'lucide-react';
 
 interface IncomeLedgerProps {
   incomeRecords: IncomeRecord[];
   expenseRecords: ExpenseRecord[];
   partners?: Partner[];
+  accountMonths?: AccountMonthRow[];
   partnerSettlements?: PartnerSettlement[];
   onDeleteIncome: (id: string) => void | Promise<void>;
   onUpdateIncome?: (id: string, updatedRecord: Partial<IncomeRecord>) => void | Promise<void>;
@@ -56,6 +61,7 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   incomeRecords,
   expenseRecords,
   partners = [],
+  accountMonths = [],
   partnerSettlements = [],
   onDeleteIncome,
   onUpdateIncome,
@@ -465,6 +471,15 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
     setEditError(null);
 
     try {
+      const oldMonth = editingRecord.date ? editingRecord.date.substring(0, 7) : '';
+      const newMonth = editDate ? editDate.substring(0, 7) : oldMonth;
+      if (oldMonth && isMonthClosed(oldMonth, accountMonths)) {
+        throw new Error(`${formatPdfMonth(oldMonth)} is closed. Reopen the month before making changes.`);
+      }
+      if (newMonth && newMonth !== oldMonth && isMonthClosed(newMonth, accountMonths)) {
+        throw new Error(`${formatPdfMonth(newMonth)} is closed. Reopen the month before making changes.`);
+      }
+
       const isAlaCarte = editPlan === 'alacarte';
       let totalAmount = 0;
       let memberCount: number | null = null;
@@ -593,14 +608,22 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
   };
 
   const handleDelete = async (id: string) => {
+    const rec = incomeRecords.find((r) => r.id === id);
+    const recMonth = rec?.date ? rec.date.substring(0, 7) : '';
+    if (recMonth && isMonthClosed(recMonth, accountMonths)) {
+      alert(`${formatPdfMonth(recMonth)} is closed. Reopen the month before making changes.`);
+      return;
+    }
+
     if (!window.confirm('Are you sure you want to delete this income entry from the database?')) {
       return;
     }
     setDeletingId(id);
     try {
       await onDeleteIncome(id);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error deleting income record:', err);
+      alert(err.message || 'Failed to delete income record.');
     } finally {
       setDeletingId(null);
     }
@@ -615,6 +638,17 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
 
   const handleSaveSettle = async () => {
     if (!settlingRecord || !onSettleIncome) return;
+    const origMonth = settlingRecord.date ? settlingRecord.date.substring(0, 7) : '';
+    const payMonth = settleDate ? settleDate.substring(0, 7) : '';
+    if (origMonth && isMonthClosed(origMonth, accountMonths)) {
+      setSettleError(`${formatPdfMonth(origMonth)} is closed. Reopen the month before making changes.`);
+      return;
+    }
+    if (payMonth && payMonth !== origMonth && isMonthClosed(payMonth, accountMonths)) {
+      setSettleError(`${formatPdfMonth(payMonth)} is closed. Reopen the month before making changes.`);
+      return;
+    }
+
     const amt = parseFloat(settleAmount);
     if (isNaN(amt) || amt <= 0) {
       setSettleError('Please enter a valid settlement amount greater than 0.');

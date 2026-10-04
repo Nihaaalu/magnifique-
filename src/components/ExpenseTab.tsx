@@ -14,9 +14,11 @@ import {
 import {
   getPreviousMonthString,
   isPreviousMonthEligible,
+  isMonthClosed,
 } from '../utils/accountBalanceUtils';
 import { formatPdfMonth } from '../services/pdfReportGenerator';
 import { ExpenseLedger } from './ExpenseLedger';
+import { Lock } from 'lucide-react';
 
 interface ExpenseTabProps {
   expenseRecords: ExpenseRecord[];
@@ -124,6 +126,14 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
       isPreviousMonthOpen && selectedAccountingMonth === previousMonthKey
         ? `${previousMonthKey}-01`
         : `${expenseMonthKey}-01`;
+
+    const targetMonth = effectiveAccountingMonth.substring(0, 7);
+    if (isMonthClosed(targetMonth, accountMonths)) {
+      setValidationError(
+        `${formatPdfMonth(targetMonth)} is closed. Reopen the month before making changes.`
+      );
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -360,6 +370,16 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
               </div>
             </div>
 
+            {/* Closed month warning banner */}
+            {isMonthClosed(selectedAccountingMonth, accountMonths) && (
+              <div className="p-3 bg-[#201212] border border-[#3d1d1d] text-[#f87171] rounded-lg text-xs font-semibold flex items-center gap-2">
+                <Lock className="w-4 h-4 shrink-0 text-[#f87171]" />
+                <span>
+                  {formatPdfMonth(selectedAccountingMonth)} is closed. Reopen the month before making changes.
+                </span>
+              </div>
+            )}
+
             {/* Actions: Secondary (Clear) & Gold Primary (Save Expense) */}
             <div className="flex items-center gap-2 pt-2">
               <button
@@ -375,8 +395,10 @@ export const ExpenseTab: React.FC<ExpenseTabProps> = ({
                 type="button"
                 id="expense-save-btn"
                 onClick={() => handleSubmit()}
-                disabled={isSubmitting}
-                className="flex-1 py-2.5 px-4 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] rounded-lg text-xs sm:text-sm font-black tracking-wider uppercase transition-all shadow-xs cursor-pointer min-h-[44px] text-center disabled:opacity-50"
+                disabled={isSubmitting || isMonthClosed(selectedAccountingMonth, accountMonths)}
+                className={`flex-1 py-2.5 px-4 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] rounded-lg text-xs sm:text-sm font-black tracking-wider uppercase transition-all shadow-xs cursor-pointer min-h-[44px] text-center ${
+                  isMonthClosed(selectedAccountingMonth, accountMonths) ? 'opacity-40 cursor-not-allowed' : ''
+                }`}
               >
                 {isSubmitting ? 'SAVING TO SUPABASE...' : 'SAVE EXPENSE'}
               </button>

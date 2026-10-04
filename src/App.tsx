@@ -41,7 +41,9 @@ import {
   calculateAllMonthsSummary,
   getExpenseAccountingMonth,
   getAllUniqueMonths,
+  isMonthClosed,
 } from './utils/accountBalanceUtils';
+import { formatPdfMonth } from './services/pdfReportGenerator';
 import { Navbar } from './components/Navbar';
 import { IncomeTab } from './components/IncomeTab';
 import { ExpenseTab } from './components/ExpenseTab';
@@ -331,6 +333,11 @@ export default function App() {
   const handleAddIncome = async (
     entry: Omit<IncomeEntryRow, 'id' | 'created_at' | 'updated_at'>
   ) => {
+    const incMonth = entry.entry_date ? entry.entry_date.substring(0, 7) : '';
+    if (incMonth && isMonthClosed(incMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(incMonth)} is closed. Reopen the month before making changes.`);
+    }
+
     await createIncomeEntry(entry);
     const [updatedIncome, updatedBalances, updatedMonths] = await Promise.all([
       fetchIncomeEntries(),
@@ -341,7 +348,6 @@ export default function App() {
     setPartnerBalances(updatedBalances);
 
     // Sync affected month from database transaction records
-    const incMonth = entry.entry_date ? entry.entry_date.substring(0, 7) : '';
     if (incMonth) {
       syncAccountMonthWithLiveTransactions(incMonth).catch(() => {});
     }
@@ -377,6 +383,14 @@ export default function App() {
     // Identify old month before update
     const oldEntry = incomeRecords.find((r) => r.id === id);
     const oldMonth = oldEntry?.date ? oldEntry.date.substring(0, 7) : '';
+    const newMonth = updates.date ? updates.date.substring(0, 7) : oldMonth;
+
+    if (oldMonth && isMonthClosed(oldMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(oldMonth)} is closed. Reopen the month before making changes.`);
+    }
+    if (newMonth && newMonth !== oldMonth && isMonthClosed(newMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(newMonth)} is closed. Reopen the month before making changes.`);
+    }
 
     const rowUpdates: Partial<IncomeEntryRow> = {};
     if (updates.date !== undefined) rowUpdates.entry_date = updates.date;
@@ -419,7 +433,6 @@ export default function App() {
     setPartnerBalances(updatedBalances);
 
     // Sync affected month(s) from database transaction records
-    const newMonth = updates.date ? updates.date.substring(0, 7) : oldMonth;
     if (oldMonth) syncAccountMonthWithLiveTransactions(oldMonth).catch(() => {});
     if (newMonth && newMonth !== oldMonth) syncAccountMonthWithLiveTransactions(newMonth).catch(() => {});
 
@@ -450,6 +463,9 @@ export default function App() {
   const handleDeleteIncome = async (id: string) => {
     const oldEntry = incomeRecords.find((r) => r.id === id);
     const oldMonth = oldEntry?.date ? oldEntry.date.substring(0, 7) : '';
+    if (oldMonth && isMonthClosed(oldMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(oldMonth)} is closed. Reopen the month before making changes.`);
+    }
 
     await deleteIncomeEntry(id);
     const [updatedIncome, updatedBalances, updatedMonths] = await Promise.all([
@@ -491,6 +507,17 @@ export default function App() {
     paymentDate: string,
     amount: number
   ) => {
+    const oldEntry = incomeRecords.find((r) => r.id === incomeEntryId);
+    const oldMonth = oldEntry?.date ? oldEntry.date.substring(0, 7) : '';
+    const payMonth = paymentDate ? paymentDate.substring(0, 7) : '';
+
+    if (oldMonth && isMonthClosed(oldMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(oldMonth)} is closed. Reopen the month before making changes.`);
+    }
+    if (payMonth && payMonth !== oldMonth && isMonthClosed(payMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(payMonth)} is closed. Reopen the month before making changes.`);
+    }
+
     await createIncomePaymentSettlement({
       income_entry_id: incomeEntryId,
       payment_date: paymentDate,
@@ -504,7 +531,6 @@ export default function App() {
     setIncomeRecords(updatedIncome);
     setPartnerBalances(updatedBalances);
 
-    const payMonth = paymentDate ? paymentDate.substring(0, 7) : '';
     if (payMonth) syncAccountMonthWithLiveTransactions(payMonth).catch(() => {});
 
     const calculatedSummaries = calculateAllMonthsSummary(
@@ -535,6 +561,15 @@ export default function App() {
   const handleAddExpense = async (
     entry: Omit<ExpenseEntryRow, 'id' | 'created_at' | 'updated_at'>
   ) => {
+    const expAccMonth = entry.accounting_month
+      ? entry.accounting_month.substring(0, 7)
+      : entry.expense_date
+      ? entry.expense_date.substring(0, 7)
+      : '';
+    if (expAccMonth && isMonthClosed(expAccMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(expAccMonth)} is closed. Reopen the month before making changes.`);
+    }
+
     await createExpenseEntry(entry);
     const [updatedExpenses, updatedBalances, updatedMonths] = await Promise.all([
       fetchExpenseEntries(),
@@ -544,12 +579,6 @@ export default function App() {
     setExpenseRecords(updatedExpenses);
     setPartnerBalances(updatedBalances);
 
-    // Determine affected accounting month
-    const expAccMonth = entry.accounting_month
-      ? entry.accounting_month.substring(0, 7)
-      : entry.expense_date
-      ? entry.expense_date.substring(0, 7)
-      : '';
     if (expAccMonth) syncAccountMonthWithLiveTransactions(expAccMonth).catch(() => {});
 
     const calculatedSummaries = calculateAllMonthsSummary(
@@ -582,6 +611,18 @@ export default function App() {
   ) => {
     const oldEntry = expenseRecords.find((r) => r.id === id);
     const oldMonth = oldEntry ? getExpenseAccountingMonth(oldEntry) : '';
+    const newEntryMonth = updates.accountingMonth
+      ? updates.accountingMonth.substring(0, 7)
+      : updates.date
+      ? updates.date.substring(0, 7)
+      : oldMonth;
+
+    if (oldMonth && isMonthClosed(oldMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(oldMonth)} is closed. Reopen the month before making changes.`);
+    }
+    if (newEntryMonth && newEntryMonth !== oldMonth && isMonthClosed(newEntryMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(newEntryMonth)} is closed. Reopen the month before making changes.`);
+    }
 
     const rowUpdates: Partial<ExpenseEntryRow> = {};
     if (updates.date !== undefined) rowUpdates.expense_date = updates.date;
@@ -641,6 +682,9 @@ export default function App() {
   const handleDeleteExpense = async (id: string) => {
     const oldEntry = expenseRecords.find((r) => r.id === id);
     const oldMonth = oldEntry ? getExpenseAccountingMonth(oldEntry) : '';
+    if (oldMonth && isMonthClosed(oldMonth, accountMonths)) {
+      throw new Error(`${formatPdfMonth(oldMonth)} is closed. Reopen the month before making changes.`);
+    }
 
     await deleteExpenseEntry(id);
     const [updatedExpenses, updatedBalances, updatedMonths] = await Promise.all([
@@ -809,6 +853,7 @@ export default function App() {
             incomeRecords={incomeRecords}
             expenseRecords={expenseRecords}
             partners={partners}
+            accountMonths={accountMonths}
             partnerSettlements={partnerSettlements}
             onAddIncome={handleAddIncome}
             onDeleteIncome={handleDeleteIncome}

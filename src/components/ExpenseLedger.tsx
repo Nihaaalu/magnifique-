@@ -25,6 +25,7 @@ import {
   getExpenseAccountingMonth,
   getPreviousMonthString,
   isPreviousMonthEligible,
+  isMonthClosed,
 } from '../utils/accountBalanceUtils';
 import { formatPdfMonth } from '../services/pdfReportGenerator';
 import { useSwipeNavigation } from '../utils/useSwipeNavigation';
@@ -238,6 +239,15 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
         ? (editAccountingMonth.length === 7 ? `${editAccountingMonth}-01` : editAccountingMonth)
         : `${editDate.substring(0, 7)}-01`;
 
+      const oldMonth = getExpenseAccountingMonth(editingRecord);
+      const newMonth = targetAccMonth.substring(0, 7);
+      if (oldMonth && isMonthClosed(oldMonth, accountMonths)) {
+        throw new Error(`${formatPdfMonth(oldMonth)} is closed. Reopen the month before making changes.`);
+      }
+      if (newMonth && newMonth !== oldMonth && isMonthClosed(newMonth, accountMonths)) {
+        throw new Error(`${formatPdfMonth(newMonth)} is closed. Reopen the month before making changes.`);
+      }
+
       await onUpdateExpense(editingRecord.id, {
         date: editDate,
         accountingMonth: targetAccMonth,
@@ -259,14 +269,22 @@ export const ExpenseLedger: React.FC<ExpenseLedgerProps> = ({
   };
 
   const handleDelete = async (id: string) => {
+    const record = expenseRecords.find((r) => r.id === id);
+    const recMonth = record ? getExpenseAccountingMonth(record) : '';
+    if (recMonth && isMonthClosed(recMonth, accountMonths)) {
+      alert(`${formatPdfMonth(recMonth)} is closed. Reopen the month before making changes.`);
+      return;
+    }
+
     if (!window.confirm('Are you sure you want to delete this expense entry from the database?')) {
       return;
     }
     setDeletingId(id);
     try {
       await onDeleteExpense(id);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error deleting expense record:', err);
+      alert(err.message || 'Failed to delete expense record.');
     } finally {
       setDeletingId(null);
     }

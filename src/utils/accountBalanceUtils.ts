@@ -196,6 +196,9 @@ export function getAllAvailableAccountMonths(
 ): string[] {
   const monthSet = new Set<string>();
 
+  // Always include business start month
+  monthSet.add(BUSINESS_START_ACCOUNTING_MONTH);
+
   incomeRecords.forEach((r) => {
     if (r.date && r.date.length >= 7) {
       const m = r.date.substring(0, 7);
@@ -213,11 +216,7 @@ export function getAllAvailableAccountMonths(
   });
 
   accountMonths.forEach((m) => {
-    if (
-      m.month_start &&
-      m.month_start.length >= 7 &&
-      (m.is_closed || (m.total_income && m.total_income > 0) || (m.total_expense && m.total_expense > 0))
-    ) {
+    if (m.month_start && m.month_start.length >= 7) {
       const mStr = m.month_start.substring(0, 7);
       if (mStr >= BUSINESS_START_ACCOUNTING_MONTH) {
         monthSet.add(mStr);

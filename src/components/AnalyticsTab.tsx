@@ -15,6 +15,7 @@ import {
 import {
   generateDailyAccountsPdf,
   generateMonthlyAccountsPdf,
+  generateClosingBalancePdf,
   formatPdfMonth,
 } from '../services/pdfReportGenerator';
 import {
@@ -100,7 +101,8 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
   const availableMonths = getAllAvailableAccountMonths(
     incomeRecords,
     expenseRecords,
-    accountMonths
+    accountMonths,
+    partnerSettlements
   );
 
   // Selected Daily Date state for date navigator
@@ -283,6 +285,36 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
     } catch (err: any) {
       console.error('Failed to generate monthly accounts PDF:', err);
       setDownloadError(err.message || 'Failed to generate PDF report. Please try again.');
+    } finally {
+      setGeneratingType(null);
+    }
+  };
+
+  // 2b. Download Closing Balance PDF (Official Month Closing Report)
+  const handleDownloadClosingPdf = async (monthStr: string) => {
+    if (generatingType || !monthStr) return;
+    setGeneratingType(`closing-${monthStr}`);
+    setDownloadError(null);
+    setDownloadMsg(null);
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const doc = generateClosingBalancePdf(
+        monthStr,
+        incomeRecords,
+        expenseRecords,
+        accountMonths,
+        partnerSettlements,
+        partners
+      );
+      const fileName = `MAGNIFIQUE_2.0_Closing_Balance_${monthStr}.pdf`;
+      doc.save(fileName);
+
+      setDownloadMsg(`Closing Balance PDF downloaded successfully: ${fileName}`);
+      setTimeout(() => setDownloadMsg(null), 4000);
+    } catch (err: any) {
+      console.error('Failed to generate closing balance PDF:', err);
+      setDownloadError(err.message || 'Failed to generate Closing Balance PDF. Please try again.');
     } finally {
       setGeneratingType(null);
     }
@@ -1123,7 +1155,46 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             </select>
           </div>
 
-          {/* Action Button: CLOSE BALANCE FOR THIS MONTH or RE-OPEN MONTH */}
+          {/* Status Indicator */}
+          <div className="flex items-center justify-between text-xs pt-0.5">
+            <span className="text-[#888888] font-medium">Status:</span>
+            {!(allMonthsSummary[selectedCloseMonth]?.isClosed) ? (
+              <span className="inline-flex items-center gap-1 font-bold text-[#4ade80] bg-[#122216] border border-[#1b3d22] px-2.5 py-0.5 rounded-md text-[11px]">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#4ade80] animate-pulse" />
+                <span>ACTIVE (RUNNING)</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 font-bold text-[#f87171] bg-[#201212] border border-[#3d1d1d] px-2.5 py-0.5 rounded-md text-[11px]">
+                <Lock className="w-3 h-3 text-[#f87171]" />
+                <span>CLOSED</span>
+              </span>
+            )}
+          </div>
+
+          {/* Action 1: Download Closing Balance PDF (Official Month Closing Report) */}
+          <button
+            type="button"
+            id="btn-download-closing-balance-pdf"
+            onClick={() => handleDownloadClosingPdf(selectedCloseMonth)}
+            disabled={generatingType !== null || availableMonths.length === 0 || !selectedCloseMonth}
+            className={`w-full px-4 py-3 bg-[#111111] hover:bg-[#1D1D1D] active:bg-[#222222] border border-[#2A2A2A] hover:border-[#D4AF37] text-[#D4AF37] hover:text-[#F2C94C] rounded-lg text-xs sm:text-sm font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer min-h-[46px] transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed ${
+              generatingType === `closing-${selectedCloseMonth}` ? 'opacity-80' : ''
+            }`}
+          >
+            {generatingType === `closing-${selectedCloseMonth}` ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Generating Closing Balance PDF...</span>
+              </>
+            ) : (
+              <>
+                <FileText className="w-4 h-4 text-[#D4AF37]" />
+                <span>DOWNLOAD CLOSING BALANCE PDF</span>
+              </>
+            )}
+          </button>
+
+          {/* Action 2: CLOSE BALANCE FOR THIS MONTH or REOPEN THIS MONTH */}
           {!(allMonthsSummary[selectedCloseMonth]?.isClosed) ? (
             <button
               type="button"
@@ -1144,7 +1215,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               className="w-full px-4 py-3 bg-[#111111] hover:bg-[#1D1D1D] active:bg-[#222222] border border-[#2A2A2A] hover:border-[#D4AF37] text-[#D4AF37] hover:text-[#F2C94C] rounded-lg text-xs sm:text-sm font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer min-h-[46px] transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Unlock className="w-4 h-4 text-[#D4AF37]" />
-              <span>RE-OPEN MONTH</span>
+              <span>REOPEN THIS MONTH</span>
             </button>
           )}
         </div>
@@ -1308,13 +1379,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
             <div className="flex items-center gap-2.5 text-[#D4AF37]">
               <Unlock className="w-5 h-5 shrink-0" />
               <h3 className="text-sm font-bold text-[#F5F5F5]">
-                RE-OPEN {formatPdfMonth(selectedCloseMonth).toUpperCase()}?
+                REOPEN {formatPdfMonth(selectedCloseMonth).toUpperCase()}?
               </h3>
             </div>
 
             <div className="space-y-2 text-xs text-[#D0D0D0]">
               <p>
-                Are you sure you want to re-open the accounting records for{' '}
+                Are you sure you want to reopen the accounting records for{' '}
                 <strong className="text-[#F5F5F5] font-bold">
                   {formatPdfMonth(selectedCloseMonth)}
                 </strong>
@@ -1344,10 +1415,10 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 {isProcessingReopen ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Re-opening...</span>
+                    <span>Reopening...</span>
                   </>
                 ) : (
-                  <span>RE-OPEN MONTH</span>
+                  <span>REOPEN THIS MONTH</span>
                 )}
               </button>
             </div>

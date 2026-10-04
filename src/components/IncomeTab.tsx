@@ -8,17 +8,22 @@ import {
   Partner,
   PartnerSettlement,
   IncomeEntryRow,
+  AccountMonthRow,
 } from '../types';
 import {
   formatCurrency,
   getTodayDateString,
 } from '../utils/formatters';
+import { isMonthClosed } from '../utils/accountBalanceUtils';
+import { formatPdfMonth } from '../services/pdfReportGenerator';
 import { IncomeLedger } from './IncomeLedger';
+import { Lock } from 'lucide-react';
 
 interface IncomeTabProps {
   incomeRecords: IncomeRecord[];
   expenseRecords: ExpenseRecord[];
   partners: Partner[];
+  accountMonths?: AccountMonthRow[];
   partnerSettlements?: PartnerSettlement[];
   onAddIncome: (record: Omit<IncomeEntryRow, 'id' | 'created_at' | 'updated_at'>) => Promise<void>;
   onDeleteIncome: (id: string) => Promise<void>;
@@ -34,6 +39,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   incomeRecords,
   expenseRecords,
   partners,
+  accountMonths = [],
   partnerSettlements = [],
   onAddIncome,
   onDeleteIncome,
@@ -55,6 +61,11 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const [customByWho, setCustomByWho] = useState<string>('');
   const [travels, setTravels] = useState<string>('');
   const [entryDate, setEntryDate] = useState<string>(getTodayDateString());
+
+  // Check if chosen entryDate is in a closed month
+  const isEntryMonthClosed = Boolean(
+    entryDate && isMonthClosed(entryDate.substring(0, 7), accountMonths)
+  );
 
   // Meal inputs
   const [membersCount, setMembersCount] = useState<string>('');
@@ -247,6 +258,14 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setValidationError(null);
+
+    const entryMonth = entryDate ? entryDate.substring(0, 7) : '';
+    if (entryMonth && isMonthClosed(entryMonth, accountMonths)) {
+      setValidationError(
+        `${formatPdfMonth(entryMonth)} is closed. Reopen the month before making changes.`
+      );
+      return;
+    }
 
     if (isAlaCarte) {
       const enteredTotal = parseFloat(manualTotalAmount);
@@ -1286,6 +1305,15 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                   </div>
                 </div>
               )}
+              {/* Closed month warning banner */}
+              {isEntryMonthClosed && (
+                <div className="p-3 bg-[#201212] border border-[#3d1d1d] text-[#f87171] rounded-lg text-xs font-semibold flex items-center gap-2 mt-2">
+                  <Lock className="w-4 h-4 shrink-0 text-[#f87171]" />
+                  <span>
+                    {formatPdfMonth(entryDate.substring(0, 7))} is closed. Reopen the month before making changes.
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Action Buttons: Clear & Bold Gold Primary (Save) */}
@@ -1303,8 +1331,10 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
                 type="button"
                 id="income-save-btn"
                 onClick={() => handleSubmit()}
-                disabled={isSubmitting}
-                className="flex-1 py-2.5 px-4 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] rounded-lg text-xs sm:text-sm font-black tracking-wider uppercase transition-all shadow-xs cursor-pointer min-h-[44px] text-center disabled:opacity-50"
+                disabled={isSubmitting || isEntryMonthClosed}
+                className={`flex-1 py-2.5 px-4 bg-[#D4AF37] hover:bg-[#F2C94C] active:bg-[#9A7B16] text-[#0A0A0A] rounded-lg text-xs sm:text-sm font-black tracking-wider uppercase transition-all shadow-xs cursor-pointer min-h-[44px] text-center ${
+                  isEntryMonthClosed ? 'opacity-40 cursor-not-allowed' : ''
+                }`}
               >
                 {getSaveButtonLabel()}
               </button>
@@ -1347,6 +1377,7 @@ export const IncomeTab: React.FC<IncomeTabProps> = ({
           incomeRecords={incomeRecords}
           expenseRecords={expenseRecords}
           partners={partners}
+          accountMonths={accountMonths}
           partnerSettlements={partnerSettlements}
           onDeleteIncome={onDeleteIncome}
           onUpdateIncome={onUpdateIncome}
