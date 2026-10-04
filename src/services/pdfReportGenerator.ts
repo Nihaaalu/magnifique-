@@ -470,11 +470,8 @@ const drawSummaryBox = (
   activePartners.forEach((p, idx) => {
     const rounded = Math.round((p.toHotel + Number.EPSILON) * 100) / 100;
     const isPositive = rounded > 0;
-    const isIrshad = (p.partner || '').trim().toUpperCase() === 'IRSHAD';
     const partnerLabel = isPositive
-      ? (isIrshad
-          ? `IRSHAD OUTSTANDING: ${formatPdfCurrency(rounded)}`
-          : `${p.partner} TO HOTEL: ${formatPdfCurrency(rounded)}`)
+      ? `${p.partner} TO HOTEL: ${formatPdfCurrency(rounded)}`
       : `HOTEL TO ${p.partner}: ${formatPdfCurrency(Math.abs(rounded))}`;
 
     const boxY = y + 65 + idx * 16;
