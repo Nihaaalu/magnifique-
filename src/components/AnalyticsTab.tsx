@@ -138,7 +138,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
   });
   const [selectedReportType, setSelectedReportType] = useState<PartnerReportType>('EXPENSE');
 
-  const analyticsPartners = ['IRSHAD', 'ANSARI', 'MUSADDIQ', 'SATHISH', 'YOGESH'];
+  const analyticsPartners = ['IRSHAD', 'ANSARI', 'MUSADDIQ', 'SATHISH', 'YOGESH', 'HOTEL'];
   const reportTypes: PartnerReportType[] = ['EXPENSE', 'INCOME', 'INCOME + EXPENSE'];
 
   // Close / Re-open Target Month State & Dialogs
@@ -920,7 +920,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               <select
                 id="select-partner-analytics-name"
                 value={selectedAnalyticsPartner}
-                onChange={(e) => setSelectedAnalyticsPartner(e.target.value)}
+                onChange={(e) => {
+                  const newPartner = e.target.value;
+                  setSelectedAnalyticsPartner(newPartner);
+                  if (newPartner === 'HOTEL') {
+                    setSelectedReportType('EXPENSE');
+                  }
+                }}
                 className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
               >
                 {analyticsPartners.map((name) => (
@@ -964,13 +970,18 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 id="select-partner-report-type"
                 value={selectedReportType}
                 onChange={(e) => setSelectedReportType(e.target.value as PartnerReportType)}
-                className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
+                disabled={selectedAnalyticsPartner === 'HOTEL'}
+                className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {reportTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
+                {selectedAnalyticsPartner === 'HOTEL' ? (
+                  <option value="EXPENSE">EXPENSE</option>
+                ) : (
+                  reportTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 
@@ -982,7 +993,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 handleDownloadPartnerAnalyticsPdf(
                   selectedAnalyticsPartner,
                   selectedPartnerMonth || selectedMonth,
-                  selectedReportType
+                  selectedAnalyticsPartner === 'HOTEL' ? 'EXPENSE' : selectedReportType
                 )
               }
               disabled={
@@ -997,12 +1008,22 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               {generatingType?.startsWith('partner-') ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin text-[#0A0A0A]" />
-                  <span>Generating {selectedAnalyticsPartner} Analytics PDF...</span>
+                  <span>
+                    Generating{' '}
+                    {selectedAnalyticsPartner === 'HOTEL'
+                      ? 'HOTEL Expense'
+                      : `${selectedAnalyticsPartner} Analytics`}{' '}
+                    PDF...
+                  </span>
                 </>
               ) : (
                 <>
                   <Download className="w-4 h-4 text-[#0A0A0A]" />
-                  <span>DOWNLOAD {selectedAnalyticsPartner} ANALYTICS PDF</span>
+                  <span>
+                    {selectedAnalyticsPartner === 'HOTEL'
+                      ? 'DOWNLOAD HOTEL EXPENSE PDF'
+                      : `DOWNLOAD ${selectedAnalyticsPartner} ANALYTICS PDF`}
+                  </span>
                 </>
               )}
             </button>

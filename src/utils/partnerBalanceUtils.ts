@@ -125,7 +125,14 @@ export function isExpensePaidByPartner(
   idToNameMap?: Map<string, string>
 ): boolean {
   const normName = normalizePartnerName(partnerName);
-  return matchPartner(normName, partnerId, exp.paidBy, exp.paidByPartnerId, idToNameMap);
+  const paidByName =
+    exp.paidBy ||
+    (exp as any).paid_by ||
+    (normName === 'HOTEL' && !exp.paidByPartnerId && !(exp as any).paid_by_partner_id
+      ? 'HOTEL'
+      : undefined);
+  const paidById = exp.paidByPartnerId || (exp as any).paid_by_partner_id;
+  return matchPartner(normName, partnerId, paidByName, paidById, idToNameMap);
 }
 
 /**
