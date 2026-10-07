@@ -920,13 +920,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               <select
                 id="select-partner-analytics-name"
                 value={selectedAnalyticsPartner}
-                onChange={(e) => {
-                  const newPartner = e.target.value;
-                  setSelectedAnalyticsPartner(newPartner);
-                  if (newPartner === 'HOTEL') {
-                    setSelectedReportType('EXPENSE');
-                  }
-                }}
+                onChange={(e) => setSelectedAnalyticsPartner(e.target.value)}
                 className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
               >
                 {analyticsPartners.map((name) => (
@@ -970,18 +964,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 id="select-partner-report-type"
                 value={selectedReportType}
                 onChange={(e) => setSelectedReportType(e.target.value as PartnerReportType)}
-                disabled={selectedAnalyticsPartner === 'HOTEL'}
-                className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
               >
-                {selectedAnalyticsPartner === 'HOTEL' ? (
-                  <option value="EXPENSE">EXPENSE</option>
-                ) : (
-                  reportTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))
-                )}
+                {reportTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -993,7 +982,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                 handleDownloadPartnerAnalyticsPdf(
                   selectedAnalyticsPartner,
                   selectedPartnerMonth || selectedMonth,
-                  selectedAnalyticsPartner === 'HOTEL' ? 'EXPENSE' : selectedReportType
+                  selectedReportType
                 )
               }
               disabled={
@@ -1011,7 +1000,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                   <span>
                     Generating{' '}
                     {selectedAnalyticsPartner === 'HOTEL'
-                      ? 'HOTEL Expense'
+                      ? `HOTEL ${
+                          selectedReportType === 'INCOME'
+                            ? 'Income'
+                            : selectedReportType === 'INCOME + EXPENSE'
+                            ? 'Income & Expense'
+                            : 'Expense'
+                        }`
                       : `${selectedAnalyticsPartner} Analytics`}{' '}
                     PDF...
                   </span>
@@ -1021,7 +1016,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                   <Download className="w-4 h-4 text-[#0A0A0A]" />
                   <span>
                     {selectedAnalyticsPartner === 'HOTEL'
-                      ? 'DOWNLOAD HOTEL EXPENSE PDF'
+                      ? `DOWNLOAD HOTEL ${selectedReportType} PDF`
                       : `DOWNLOAD ${selectedAnalyticsPartner} ANALYTICS PDF`}
                   </span>
                 </>

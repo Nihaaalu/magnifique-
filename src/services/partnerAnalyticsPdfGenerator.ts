@@ -123,6 +123,33 @@ export function groupPartnerExpenses(
 }
 
 // ============================================================================
+// FULLY PAID INCOME HELPER FOR HOTEL
+// ============================================================================
+
+export function isFullyPaidIncome(r: IncomeRecord): boolean {
+  const status = String(r.paymentStatus || (r as any).payment_status || '').toLowerCase().trim();
+  const isPaidFullStatus = status === 'paid full' || status === 'paid_full';
+
+  const total = Number(r.total ?? (r as any).total_amount) || 0;
+  const received = Number(r.amountPaid ?? (r as any).amount_received) || 0;
+  const balance = Number(r.balance ?? (r as any).balance_amount) || 0;
+
+  if (isPaidFullStatus && balance <= 0) {
+    return true;
+  }
+
+  if (total > 0 && received >= total && balance <= 0) {
+    return true;
+  }
+
+  if (isPaidFullStatus && total > 0 && received >= total) {
+    return true;
+  }
+
+  return false;
+}
+
+// ============================================================================
 // UNIVERSAL PARTNER ANALYTICS PDF GENERATOR
 // ============================================================================
 
@@ -142,6 +169,7 @@ export async function generatePartnerAnalyticsPDF(
   } = options;
 
   const normPartner = normalizePartnerName(partnerName);
+  const isHotel = normPartner === 'HOTEL';
   const targetMonth = accountingMonth || startDate.substring(0, 7);
 
   const doc = new jsPDF({
@@ -178,7 +206,7 @@ export async function generatePartnerAnalyticsPDF(
   const targetPartnerId = partnerObj?.id;
 
   // --------------------------------------------------------------------------
-  // 1. FILTER DATA CHRONOLOGICALLY FOR THIS PARTNER & ACCOUNTING MONTH
+  // 1. FILTER DATA CHRONOLOGICALLY FOR THIS PARTNER / HOTEL & ACCOUNTING MONTH
   // --------------------------------------------------------------------------
   const partnerExpenses = expenseRecords.filter((r) => {
     const accMonth = getExpenseAccountingMonth(r);
@@ -194,6 +222,9 @@ export async function generatePartnerAnalyticsPDF(
 
   const partnerIncomes = incomeRecords.filter((r) => {
     if (!r.date || r.date < startDate || r.date > endDate) return false;
+    if (isHotel) {
+      return isFullyPaidIncome(r);
+    }
     return isIncomeAssignedToPartner(r, normPartner, targetPartnerId, idToNameMap);
   });
 
@@ -201,9 +232,12 @@ export async function generatePartnerAnalyticsPDF(
   let totalIncomeReceived = 0;
   let totalIncomeBalance = 0;
   for (const inc of partnerIncomes) {
-    totalIncomeBilled += Number(inc.total) || 0;
-    totalIncomeReceived += Number(inc.amountPaid) || 0;
-    totalIncomeBalance += Number(inc.balance) || 0;
+    const billed = Number(inc.total) || 0;
+    const received = Number(inc.amountPaid) || (isHotel ? billed : 0);
+    const bal = isHotel ? 0 : (Number(inc.balance) || 0);
+    totalIncomeBilled += billed;
+    totalIncomeReceived += received;
+    totalIncomeBalance += bal;
   }
 
   const groupedExpenses = groupPartnerExpenses(partnerExpenses, totalExpense);
@@ -211,11 +245,11 @@ export async function generatePartnerAnalyticsPDF(
   // --------------------------------------------------------------------------
   // 2. HEADER DRAWING FUNCTION (Multi-page safe)
   // --------------------------------------------------------------------------
-  let reportTitle = `${normPartner} EXPENSE REPORT`;
+  let reportTitle = isHotel ? 'HOTEL EXPENSE REPORT' : `${normPartner} EXPENSE REPORT`;
   if (reportType === 'INCOME') {
-    reportTitle = `${normPartner} INCOME REPORT`;
+    reportTitle = isHotel ? 'HOTEL FULLY PAID INCOME REPORT' : `${normPartner} INCOME REPORT`;
   } else if (reportType === 'INCOME + EXPENSE') {
-    reportTitle = `${normPartner} INCOME & EXPENSE REPORT`;
+    reportTitle = isHotel ? 'HOTEL INCOME & EXPENSE REPORT' : `${normPartner} INCOME & EXPENSE REPORT`;
   }
 
   const drawnHeaders = new Set<number>();
@@ -286,12 +320,16 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(159, 18, 57);
-    doc.text(`TOTAL ${normPartner} EXPENSE`, margin + 6, curY + 5.5);
+    doc.text(isHotel ? 'TOTAL HOTEL EXPENSE' : `TOTAL ${normPartner} EXPENSE`, margin + 6, curY + 5.5);
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.8);
     doc.setTextColor(100, 116, 139);
-    doc.text(`Total expenses paid by ${normPartner}`, margin + 6, curY + 12.0);
+    doc.text(
+      isHotel ? 'Total expenses paid by HOTEL' : `Total expenses paid by ${normPartner}`,
+      margin + 6,
+      curY + 12.0
+    );
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(13);
@@ -312,7 +350,11 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(15, 23, 42);
-    doc.text(`EXPENSE BREAKDOWN BY PARTICULARS / DESCRIPTION`, margin + 5, curY + 2.5);
+    doc.text(
+      isHotel ? 'HOTEL EXPENSE BREAKDOWN BY PARTICULARS' : 'EXPENSE BREAKDOWN BY PARTICULARS / DESCRIPTION',
+      margin + 5,
+      curY + 2.5
+    );
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.8);
@@ -337,7 +379,9 @@ export async function generatePartnerAnalyticsPDF(
         : [
             [
               '-',
-              `No expenses recorded for ${normPartner} in this period`,
+              isHotel
+                ? 'No expenses recorded for HOTEL in this period'
+                : `No expenses recorded for ${normPartner} in this period`,
               'Rs. 0',
               '0.0%',
             ],
@@ -353,7 +397,7 @@ export async function generatePartnerAnalyticsPDF(
       foot: [
         [
           '',
-          `TOTAL ${normPartner} EXPENSE`,
+          isHotel ? 'TOTAL HOTEL EXPENSE' : `TOTAL ${normPartner} EXPENSE`,
           formatIndianCurrency(totalExpense),
           '100.0%',
         ],
@@ -410,13 +454,19 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(20, 83, 45);
-    doc.text(`TOTAL ${normPartner} INCOME BALANCE ASSIGNED`, margin + 6, curY + 5.5);
+    doc.text(
+      isHotel ? 'TOTAL HOTEL INCOME' : `TOTAL ${normPartner} INCOME BALANCE ASSIGNED`,
+      margin + 6,
+      curY + 5.5
+    );
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.8);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      `Billed: ${formatIndianCurrency(totalIncomeBilled)}  |  Received: ${formatIndianCurrency(totalIncomeReceived)}`,
+      isHotel
+        ? 'Total fully paid income received by Hotel'
+        : `Billed: ${formatIndianCurrency(totalIncomeBilled)}  |  Received: ${formatIndianCurrency(totalIncomeReceived)}`,
       margin + 6,
       curY + 12.0
     );
@@ -425,7 +475,7 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(13);
     doc.setTextColor(22, 101, 52);
     doc.text(
-      `Rs. ${formatIndianNumber(totalIncomeBalance)}`,
+      `Rs. ${formatIndianNumber(isHotel ? totalIncomeBilled : totalIncomeBalance)}`,
       pageWidth - margin - 6,
       curY + 10.5,
       { align: 'right' }
@@ -440,13 +490,19 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(15, 23, 42);
-    doc.text(`INCOME RECORDS ASSIGNED TO ${normPartner}`, margin + 5, curY + 2.5);
+    doc.text(
+      isHotel ? 'FULLY PAID INCOME RECEIVED BY HOTEL' : `INCOME RECORDS ASSIGNED TO ${normPartner}`,
+      margin + 5,
+      curY + 2.5
+    );
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.8);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      `${partnerIncomes.length} Entries • Total Balance: ${formatIndianCurrency(totalIncomeBalance)}`,
+      isHotel
+        ? `${partnerIncomes.length} Entries • Total Received: ${formatIndianCurrency(totalIncomeReceived)}`
+        : `${partnerIncomes.length} Entries • Total Balance: ${formatIndianCurrency(totalIncomeBalance)}`,
       pageWidth - margin,
       curY + 2.5,
       { align: 'right' }
@@ -458,20 +514,25 @@ export async function generatePartnerAnalyticsPDF(
       partnerIncomes.length > 0
         ? partnerIncomes.map((item, idx) => {
             const particulars = item.travels || (item.byWho ? `By ${item.byWho}` : '') || item.incomeType || 'Direct';
+            const itemBilled = Number(item.total) || 0;
+            const itemReceived = Number(item.amountPaid) || (isHotel ? itemBilled : 0);
+            const itemBal = isHotel ? 0 : (Number(item.balance) || 0);
             return [
               String(idx + 1),
               item.date || '',
               particulars,
-              formatIndianCurrency(Number(item.total) || 0),
-              formatIndianCurrency(Number(item.amountPaid) || 0),
-              formatIndianCurrency(Number(item.balance) || 0),
+              formatIndianCurrency(itemBilled),
+              formatIndianCurrency(itemReceived),
+              formatIndianCurrency(itemBal),
             ];
           })
         : [
             [
               '-',
               '-',
-              `No income records assigned to ${normPartner} in this period`,
+              isHotel
+                ? 'No fully paid income records in this period'
+                : `No income records assigned to ${normPartner} in this period`,
               'Rs. 0',
               'Rs. 0',
               'Rs. 0',
@@ -483,16 +544,23 @@ export async function generatePartnerAnalyticsPDF(
       margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
       showHead: 'everyPage',
       showFoot: 'lastPage',
-      head: [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED (INR)', 'RECEIVED (INR)', 'BALANCE ASSIGNED (INR)']],
+      head: [[
+        '#',
+        'DATE',
+        'PARTICULARS / CUSTOMER',
+        'BILLED (INR)',
+        'RECEIVED (INR)',
+        isHotel ? 'BALANCE (INR)' : 'BALANCE ASSIGNED (INR)',
+      ]],
       body: incomeRows,
       foot: [
         [
           '',
           '',
-          `TOTAL ${normPartner} INCOME`,
+          isHotel ? 'TOTAL HOTEL INCOME' : `TOTAL ${normPartner} INCOME`,
           formatIndianCurrency(totalIncomeBilled),
           formatIndianCurrency(totalIncomeReceived),
-          formatIndianCurrency(totalIncomeBalance),
+          formatIndianCurrency(isHotel ? 0 : totalIncomeBalance),
         ],
       ],
       theme: 'grid',
@@ -541,7 +609,7 @@ export async function generatePartnerAnalyticsPDF(
     const cardW = (contentWidth - 6) / 3;
     const summaryCardH = 17;
 
-    // Card 1: Income Balance
+    // Card 1: Income Balance / Fully Paid Income
     doc.setFillColor(240, 253, 244);
     doc.setDrawColor(187, 247, 208);
     doc.setLineWidth(0.3);
@@ -551,14 +619,22 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.8);
     doc.setTextColor(20, 83, 45);
-    doc.text('INCOME BALANCE ASSIGNED', margin + 4.5, curY + 4.8);
+    doc.text(isHotel ? 'FULLY PAID INCOME RECEIVED' : 'INCOME BALANCE ASSIGNED', margin + 4.5, curY + 4.8);
     doc.setFontSize(10.5);
     doc.setTextColor(22, 101, 52);
-    doc.text(`Rs. ${formatIndianNumber(totalIncomeBalance)}`, margin + 4.5, curY + 11.5);
+    doc.text(
+      `Rs. ${formatIndianNumber(isHotel ? totalIncomeReceived : totalIncomeBalance)}`,
+      margin + 4.5,
+      curY + 11.5
+    );
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(5.8);
     doc.setTextColor(100, 116, 139);
-    doc.text(`${partnerIncomes.length} income entries`, margin + 4.5, curY + 15.0);
+    doc.text(
+      isHotel ? `${partnerIncomes.length} fully paid entries` : `${partnerIncomes.length} income entries`,
+      margin + 4.5,
+      curY + 15.0
+    );
 
     // Card 2: Total Expense
     const card2X = margin + cardW + 3;
@@ -570,7 +646,7 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.8);
     doc.setTextColor(159, 18, 57);
-    doc.text('TOTAL EXPENSES PAID', card2X + 4.5, curY + 4.8);
+    doc.text(isHotel ? 'TOTAL HOTEL EXPENSES' : 'TOTAL EXPENSES PAID', card2X + 4.5, curY + 4.8);
     doc.setFontSize(10.5);
     doc.setTextColor(225, 29, 72);
     doc.text(`Rs. ${formatIndianNumber(totalExpense)}`, card2X + 4.5, curY + 11.5);
@@ -579,9 +655,9 @@ export async function generatePartnerAnalyticsPDF(
     doc.setTextColor(100, 116, 139);
     doc.text(`${partnerExpenses.length} expense entries`, card2X + 4.5, curY + 15.0);
 
-    // Card 3: Net Operational Balance
+    // Card 3: Net Operational Balance / Net Position
     const card3X = card2X + cardW + 3;
-    const netDifference = totalIncomeBalance - totalExpense;
+    const netDifference = isHotel ? (totalIncomeReceived - totalExpense) : (totalIncomeBalance - totalExpense);
     doc.setFillColor(254, 243, 199);
     doc.setDrawColor(253, 230, 138);
     doc.roundedRect(card3X, curY, cardW, summaryCardH, 2, 2, 'FD');
@@ -590,14 +666,20 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.8);
     doc.setTextColor(146, 64, 14);
-    doc.text('NET OPERATIONAL BALANCE', card3X + 4.5, curY + 4.8);
+    doc.text(isHotel ? 'NET HOTEL POSITION' : 'NET OPERATIONAL BALANCE', card3X + 4.5, curY + 4.8);
     doc.setFontSize(10.5);
     doc.setTextColor(180, 83, 9);
     doc.text(`Rs. ${formatIndianNumber(netDifference)}`, card3X + 4.5, curY + 11.5);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(5.8);
     doc.setTextColor(100, 116, 139);
-    doc.text(netDifference >= 0 ? `${normPartner} to Hotel` : `Hotel to ${normPartner}`, card3X + 4.5, curY + 15.0);
+    doc.text(
+      isHotel
+        ? (netDifference >= 0 ? 'Surplus / Net Profit' : 'Deficit / Net Loss')
+        : (netDifference >= 0 ? `${normPartner} to Hotel` : `Hotel to ${normPartner}`),
+      card3X + 4.5,
+      curY + 15.0
+    );
 
     curY += summaryCardH + 5.5;
 
@@ -607,7 +689,11 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(`1. INCOME ASSIGNED BREAKDOWN`, margin + 5, curY + 2.5);
+    doc.text(
+      isHotel ? '1. FULLY PAID INCOME RECEIVED' : '1. INCOME ASSIGNED BREAKDOWN',
+      margin + 5,
+      curY + 2.5
+    );
 
     curY += 4.5;
 
@@ -615,20 +701,25 @@ export async function generatePartnerAnalyticsPDF(
       partnerIncomes.length > 0
         ? partnerIncomes.map((item, idx) => {
             const particulars = item.travels || (item.byWho ? `By ${item.byWho}` : '') || item.incomeType || 'Direct';
+            const itemBilled = Number(item.total) || 0;
+            const itemReceived = Number(item.amountPaid) || (isHotel ? itemBilled : 0);
+            const itemBal = isHotel ? 0 : (Number(item.balance) || 0);
             return [
               String(idx + 1),
               item.date || '',
               particulars,
-              formatIndianCurrency(Number(item.total) || 0),
-              formatIndianCurrency(Number(item.amountPaid) || 0),
-              formatIndianCurrency(Number(item.balance) || 0),
+              formatIndianCurrency(itemBilled),
+              formatIndianCurrency(itemReceived),
+              formatIndianCurrency(itemBal),
             ];
           })
         : [
             [
               '-',
               '-',
-              `No income records assigned to ${normPartner} in this period`,
+              isHotel
+                ? 'No fully paid income records in this period'
+                : `No income records assigned to ${normPartner} in this period`,
               'Rs. 0',
               'Rs. 0',
               'Rs. 0',
@@ -640,16 +731,16 @@ export async function generatePartnerAnalyticsPDF(
       margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
       showHead: 'everyPage',
       showFoot: 'lastPage',
-      head: [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED', 'RECEIVED', 'BALANCE ASSIGNED']],
+      head: [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED', 'RECEIVED', isHotel ? 'BALANCE' : 'BALANCE ASSIGNED']],
       body: incomeRows,
       foot: [
         [
           '',
           '',
-          `TOTAL INCOME ASSIGNED`,
+          isHotel ? 'TOTAL HOTEL INCOME' : 'TOTAL INCOME ASSIGNED',
           formatIndianCurrency(totalIncomeBilled),
           formatIndianCurrency(totalIncomeReceived),
-          formatIndianCurrency(totalIncomeBalance),
+          formatIndianCurrency(isHotel ? 0 : totalIncomeBalance),
         ],
       ],
       theme: 'grid',
@@ -704,7 +795,11 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(`2. EXPENSE BREAKDOWN BY PARTICULARS`, margin + 5, nextY + 2.5);
+    doc.text(
+      isHotel ? '2. HOTEL EXPENSE BREAKDOWN BY PARTICULARS' : '2. EXPENSE BREAKDOWN BY PARTICULARS',
+      margin + 5,
+      nextY + 2.5
+    );
 
     nextY += 4.5;
 
@@ -719,7 +814,9 @@ export async function generatePartnerAnalyticsPDF(
         : [
             [
               '-',
-              `No expenses recorded for ${normPartner} in this period`,
+              isHotel
+                ? 'No expenses recorded for HOTEL in this period'
+                : `No expenses recorded for ${normPartner} in this period`,
               'Rs. 0',
               '0.0%',
             ],
@@ -735,7 +832,7 @@ export async function generatePartnerAnalyticsPDF(
       foot: [
         [
           '',
-          `TOTAL ${normPartner} EXPENSES`,
+          isHotel ? 'TOTAL HOTEL EXPENSES' : `TOTAL ${normPartner} EXPENSES`,
           formatIndianCurrency(totalExpense),
           '100.0%',
         ],
