@@ -245,18 +245,6 @@ export async function generatePartnerAnalyticsPDF(
     return isExpensePaidByPartner(r, normPartner, targetPartnerId, idToNameMap);
   });
 
-  // Sort expenses in chronological order: EARLIEST DATE -> LATEST DATE
-  partnerExpenses.sort((a, b) => {
-    const dateA = a.date || '';
-    const dateB = b.date || '';
-    if (dateA !== dateB) {
-      return dateA.localeCompare(dateB);
-    }
-    const createdA = (a as any).created_at || '';
-    const createdB = (b as any).created_at || '';
-    return createdA.localeCompare(createdB);
-  });
-
   let totalExpense = 0;
   for (const exp of partnerExpenses) {
     totalExpense += Number(exp.amount) || 0;
@@ -273,17 +261,29 @@ export async function generatePartnerAnalyticsPDF(
     return isIncomeAssignedToPartner(r, normPartner, targetPartnerId, idToNameMap);
   });
 
-  // Sort income in chronological order: EARLIEST DATE -> LATEST DATE (01 -> 30)
-  partnerIncomes.sort((a, b) => {
-    const dateA = a.date || '';
-    const dateB = b.date || '';
-    if (dateA !== dateB) {
-      return dateA.localeCompare(dateB);
-    }
-    const createdA = (a as any).created_at || '';
-    const createdB = (b as any).created_at || '';
-    return createdA.localeCompare(createdB);
-  });
+  // Sort income records chronologically from first day to last day (ascending by actual underlying date)
+  // specifically for Partner Analytics -> Income -> Download PDF.
+  // Preserves descending order for Expense reports, Other Income reports, etc.
+  if (reportType === 'INCOME' && !isOther) {
+    partnerIncomes.sort((a, b) => {
+      const dateA = a.date || '';
+      const dateB = b.date || '';
+      if (dateA !== dateB) {
+        return dateA.localeCompare(dateB);
+      }
+      const timeA = a.time || '';
+      const timeB = b.time || '';
+      if (timeA && timeB && timeA !== timeB) {
+        return timeA.localeCompare(timeB);
+      }
+      const createdA = a.created_at || '';
+      const createdB = b.created_at || '';
+      if (createdA && createdB && createdA !== createdB) {
+        return createdA.localeCompare(createdB);
+      }
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+  }
 
   let totalIncomeBilled = 0;
   let totalIncomeReceived = 0;
@@ -510,119 +510,6 @@ export async function generatePartnerAnalyticsPDF(
         1: { cellWidth: 'auto', fontStyle: 'bold' },
         2: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
         3: { cellWidth: 28, halign: 'right', fontStyle: 'bold' },
-      },
-      didDrawPage: (data) => {
-        drawPageHeader(data.pageNumber);
-      },
-    });
-
-    // Detailed Expense Log Section (Dated records, chronological order: oldest -> newest)
-    const afterCategoryTable = (doc as any).lastAutoTable;
-    let detailSectionY = afterCategoryTable ? afterCategoryTable.finalY + 6.0 : curY + 20;
-
-    if (detailSectionY > pageHeight - 40) {
-      doc.addPage();
-      drawPageHeader(doc.getNumberOfPages());
-      detailSectionY = 28.5;
-    }
-
-    doc.setFillColor(244, 63, 94);
-    doc.circle(margin + 1.5, detailSectionY + 1.5, 1.5, 'F');
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.setTextColor(15, 23, 42);
-    doc.text(
-      isHotel
-        ? 'HOTEL DETAILED EXPENSE LOG'
-        : isOther
-        ? 'OTHER DETAILED EXPENSE LOG'
-        : `${normPartner} DETAILED EXPENSE LOG`,
-      margin + 5,
-      detailSectionY + 2.5
-    );
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.8);
-    doc.setTextColor(100, 116, 139);
-    doc.text(
-      `${partnerExpenses.length} Expense Entries • Total: ${formatIndianCurrency(totalExpense)}`,
-      pageWidth - margin,
-      detailSectionY + 2.5,
-      { align: 'right' }
-    );
-
-    detailSectionY += 5.0;
-
-    const detailedExpenseRows =
-      partnerExpenses.length > 0
-        ? partnerExpenses.map((item, idx) => {
-            const rawDesc = (item.description || item.name || item.category || 'EXPENSE').trim().toUpperCase();
-            const itemAmount = Number(item.amount) || 0;
-            return [
-              String(idx + 1),
-              formatDisplayDate(item.date) || '',
-              rawDesc,
-              formatIndianCurrency(itemAmount),
-            ];
-          })
-        : [
-            [
-              '-',
-              '-',
-              isHotel
-                ? 'No expenses recorded for HOTEL in this period'
-                : isOther
-                ? 'No expenses recorded for OTHER in this period'
-                : `No expenses recorded for ${normPartner} in this period`,
-              'Rs. 0',
-            ],
-          ];
-
-    autoTable(doc, {
-      startY: detailSectionY,
-      margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
-      showHead: 'everyPage',
-      showFoot: 'lastPage',
-      head: [['#', 'DATE', 'PARTICULARS / DESCRIPTION', 'AMOUNT (INR)']],
-      body: detailedExpenseRows,
-      foot: [
-        [
-          '',
-          '',
-          isHotel ? 'TOTAL HOTEL EXPENSE' : isOther ? 'TOTAL OTHER EXPENSE' : `TOTAL ${normPartner} EXPENSE`,
-          formatIndianCurrency(totalExpense),
-        ],
-      ],
-      theme: 'grid',
-      styles: {
-        font: 'helvetica',
-        fontSize: 7.2,
-        cellPadding: { top: 1.4, bottom: 1.4, left: 2.0, right: 2.0 },
-        minCellHeight: 5.2,
-        lineColor: [226, 232, 240],
-        lineWidth: 0.2,
-        textColor: [30, 41, 59],
-      },
-      headStyles: {
-        fillColor: [26, 26, 26],
-        textColor: [242, 201, 76],
-        fontStyle: 'bold',
-        fontSize: 7.5,
-        cellPadding: { top: 1.6, bottom: 1.6, left: 2.0, right: 2.0 },
-      },
-      footStyles: {
-        fillColor: [241, 245, 249],
-        textColor: [15, 23, 42],
-        fontStyle: 'bold',
-        fontSize: 7.5,
-        cellPadding: { top: 1.6, bottom: 1.6, left: 2.0, right: 2.0 },
-      },
-      columnStyles: {
-        0: { cellWidth: 12, halign: 'center' },
-        1: { cellWidth: 26 },
-        2: { cellWidth: 'auto', fontStyle: 'bold' },
-        3: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
       },
       didDrawPage: (data) => {
         drawPageHeader(data.pageNumber);
@@ -1089,114 +976,6 @@ export async function generatePartnerAnalyticsPDF(
         1: { cellWidth: 'auto', fontStyle: 'bold' },
         2: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
         3: { cellWidth: 28, halign: 'right', fontStyle: 'bold' },
-      },
-      didDrawPage: (data) => {
-        drawPageHeader(data.pageNumber);
-      },
-    });
-
-    // SECTION C: DETAILED EXPENSE LOG (Dated records, chronological order: oldest -> newest)
-    const afterExpenseBreakdown = (doc as any).lastAutoTable;
-    let detailSectionY = afterExpenseBreakdown ? afterExpenseBreakdown.finalY + 6.0 : nextY + 20;
-
-    if (detailSectionY > pageHeight - 40) {
-      doc.addPage();
-      drawPageHeader(doc.getNumberOfPages());
-      detailSectionY = 28.5;
-    }
-
-    doc.setFillColor(244, 63, 94);
-    doc.circle(margin + 1.5, detailSectionY + 1.5, 1.5, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(
-      isHotel
-        ? '3. HOTEL DETAILED EXPENSE LOG'
-        : isOther
-        ? '3. OTHER DETAILED EXPENSE LOG'
-        : '3. DETAILED EXPENSE LOG',
-      margin + 5,
-      detailSectionY + 2.5
-    );
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(100, 116, 139);
-    doc.text(
-      `${partnerExpenses.length} Expense Entries • Total: ${formatIndianCurrency(totalExpense)}`,
-      pageWidth - margin,
-      detailSectionY + 2.5,
-      { align: 'right' }
-    );
-
-    detailSectionY += 4.5;
-
-    const detailedExpenseRows =
-      partnerExpenses.length > 0
-        ? partnerExpenses.map((item, idx) => {
-            const rawDesc = (item.description || item.name || item.category || 'EXPENSE').trim().toUpperCase();
-            const itemAmount = Number(item.amount) || 0;
-            return [
-              String(idx + 1),
-              formatDisplayDate(item.date) || '',
-              rawDesc,
-              formatIndianCurrency(itemAmount),
-            ];
-          })
-        : [
-            [
-              '-',
-              '-',
-              isHotel
-                ? 'No expenses recorded for HOTEL in this period'
-                : `No expenses recorded for ${normPartner} in this period`,
-              'Rs. 0',
-            ],
-          ];
-
-    autoTable(doc, {
-      startY: detailSectionY,
-      margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
-      showHead: 'everyPage',
-      showFoot: 'lastPage',
-      head: [['#', 'DATE', 'PARTICULARS / DESCRIPTION', 'AMOUNT (INR)']],
-      body: detailedExpenseRows,
-      foot: [
-        [
-          '',
-          '',
-          isHotel ? 'TOTAL HOTEL EXPENSES' : `TOTAL ${normPartner} EXPENSES`,
-          formatIndianCurrency(totalExpense),
-        ],
-      ],
-      theme: 'grid',
-      styles: {
-        font: 'helvetica',
-        fontSize: 6.8,
-        cellPadding: { top: 1.2, bottom: 1.2, left: 1.8, right: 1.8 },
-        minCellHeight: 4.8,
-        lineColor: [226, 232, 240],
-        lineWidth: 0.2,
-        textColor: [30, 41, 59],
-      },
-      headStyles: {
-        fillColor: [26, 26, 26],
-        textColor: [242, 201, 76],
-        fontStyle: 'bold',
-        fontSize: 7.0,
-      },
-      footStyles: {
-        fillColor: [241, 245, 249],
-        textColor: [15, 23, 42],
-        fontStyle: 'bold',
-        fontSize: 7.0,
-      },
-      columnStyles: {
-        0: { cellWidth: 12, halign: 'center' },
-        1: { cellWidth: 26 },
-        2: { cellWidth: 'auto', fontStyle: 'bold' },
-        3: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
       },
       didDrawPage: (data) => {
         drawPageHeader(data.pageNumber);
