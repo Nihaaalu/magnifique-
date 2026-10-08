@@ -11,6 +11,7 @@ import {
   formatCurrency,
   getTodayDateString,
   getCurrentMonthString,
+  formatDisplayDate,
 } from '../utils/formatters';
 import {
   generateDailyAccountsPdf,
@@ -138,7 +139,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
   });
   const [selectedReportType, setSelectedReportType] = useState<PartnerReportType>('EXPENSE');
 
-  const analyticsPartners = ['IRSHAD', 'ANSARI', 'MUSADDIQ', 'SATHISH', 'YOGESH', 'HOTEL'];
+  const analyticsPartners = ['IRSHAD', 'ANSARI', 'MUSADDIQ', 'SATHISH', 'YOGESH', 'HOTEL', 'OTHER'];
   const reportTypes: PartnerReportType[] = ['EXPENSE', 'INCOME', 'INCOME + EXPENSE'];
 
   // Close / Re-open Target Month State & Dialogs
@@ -177,17 +178,10 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
     }
   };
 
-  // Helper to format date for horizontal navigator: e.g. "30 AUG 2026"
+  // Helper to format date for horizontal navigator: strictly DD/MM/YYYY
   const formatNavigatorDate = (d: string): string => {
     if (!d) return 'NO DATA';
-    try {
-      const [year, month, day] = d.split('-');
-      const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-      const mName = monthNames[parseInt(month, 10) - 1] || month;
-      return `${parseInt(day, 10)} ${mName} ${year}`;
-    } catch {
-      return d;
-    }
+    return formatDisplayDate(d);
   };
 
   const currentSummary: MonthBalanceSummary = allMonthsSummary[selectedMonth] || {
@@ -342,7 +336,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
       const daysInMonth = new Date(parseInt(year, 10), parseInt(month, 10), 0).getDate();
       const startDate = `${targetMonth}-01`;
       const endDate = `${targetMonth}-${daysInMonth.toString().padStart(2, '0')}`;
-      const periodLabel = `${formatPdfMonth(targetMonth)} (${startDate} to ${endDate})`;
+      const periodLabel = `${formatPdfMonth(targetMonth)} (${formatDisplayDate(startDate)} to ${formatDisplayDate(endDate)})`;
 
       // Unified calculation functions ensuring Analytics numbers match PDF numbers
       const incomeResult = calculateIncomeDistribution(monthIncome);
@@ -389,7 +383,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
       const daysInMonth = new Date(parseInt(year, 10), parseInt(month, 10), 0).getDate();
       const startDate = `${targetMonth}-01`;
       const endDate = `${targetMonth}-${daysInMonth.toString().padStart(2, '0')}`;
-      const periodLabel = `${formatPdfMonth(targetMonth)} (${startDate} to ${endDate})`;
+      const periodLabel = `${formatPdfMonth(targetMonth)} (${formatDisplayDate(startDate)} to ${formatDisplayDate(endDate)})`;
 
       await generatePartnerAnalyticsPDF({
         partnerName,
@@ -601,11 +595,6 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                   <span className="text-xs sm:text-sm font-black text-[#F5F5F5] tracking-wider block">
                     {availableDates.length > 0 ? formatNavigatorDate(activeDate) : 'NO ACCOUNTS'}
                   </span>
-                  {availableDates.length > 0 && (
-                    <span className="text-[10px] text-[#777777] font-medium block">
-                      {activeDate}
-                    </span>
-                  )}
                 </div>
 
                 <button
@@ -821,7 +810,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                   {formatCurrency(currentSummary.openingBalance)}
                 </span>
                 <span className="text-[9px] text-[#777777] block">
-                  {currentSummary.firstDate}
+                  {formatDisplayDate(currentSummary.firstDate)}
                 </span>
               </div>
 
@@ -920,7 +909,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
               <select
                 id="select-partner-analytics-name"
                 value={selectedAnalyticsPartner}
-                onChange={(e) => setSelectedAnalyticsPartner(e.target.value)}
+                onChange={(e) => {
+                  const p = e.target.value;
+                  setSelectedAnalyticsPartner(p);
+                  if (p === 'OTHER') {
+                    setSelectedReportType('INCOME');
+                  }
+                }}
                 className="w-full px-3 py-2 bg-[#171717] border border-[#2A2A2A] rounded-lg text-xs font-bold text-[#F5F5F5] min-h-[42px] focus:outline-none focus:border-[#D4AF37] cursor-pointer"
               >
                 {analyticsPartners.map((name) => (
@@ -1007,6 +1002,14 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                             ? 'Income & Expense'
                             : 'Expense'
                         }`
+                      : selectedAnalyticsPartner === 'OTHER'
+                      ? `OTHER ${
+                          selectedReportType === 'INCOME'
+                            ? 'Income'
+                            : selectedReportType === 'INCOME + EXPENSE'
+                            ? 'Income & Expense'
+                            : 'Expense'
+                        }`
                       : `${selectedAnalyticsPartner} Analytics`}{' '}
                     PDF...
                   </span>
@@ -1017,6 +1020,8 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
                   <span>
                     {selectedAnalyticsPartner === 'HOTEL'
                       ? `DOWNLOAD HOTEL ${selectedReportType} PDF`
+                      : selectedAnalyticsPartner === 'OTHER'
+                      ? `DOWNLOAD OTHER ${selectedReportType} PDF`
                       : `DOWNLOAD ${selectedAnalyticsPartner} ANALYTICS PDF`}
                   </span>
                 </>

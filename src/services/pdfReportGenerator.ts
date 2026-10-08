@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { IncomeRecord, ExpenseRecord, AccountMonthRow, PartnerSettlement, Partner } from '../types';
+import { formatDisplayDate } from '../utils/formatters';
 import {
   calculateDayBalanceSummary,
   calculateAllMonthsSummary,
@@ -35,34 +36,16 @@ export const formatPdfCurrencyExact = (amount: number): string => {
 
 export const formatInrPdf = formatPdfCurrencyExact;
 
-// Format Date YYYY-MM-DD to DD Month YYYY (e.g. 30 August 2026)
+// Format Date to DD/MM/YYYY
 export const formatPdfDate = (dateStr: string): string => {
   if (!dateStr) return '';
-  const parts = dateStr.split('-');
-  if (parts.length !== 3) return dateStr;
-  const year = parseInt(parts[0], 10);
-  const month = parseInt(parts[1], 10) - 1;
-  const day = parseInt(parts[2], 10);
-  const d = new Date(year, month, day);
-  return d.toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
+  return formatDisplayDate(dateStr);
 };
 
-// Format Date YYYY-MM-DD to short display (e.g. 01 Aug 2026)
+// Format Date to short display (DD/MM/YYYY)
 export const formatPdfDateMedium = (dateStr: string): string => {
   if (!dateStr) return '';
-  const parts = dateStr.split('-');
-  if (parts.length !== 3) return dateStr;
-  const year = parseInt(parts[0], 10);
-  const month = parseInt(parts[1], 10) - 1;
-  const day = parseInt(parts[2], 10);
-  const d = new Date(year, month, day);
-  const dd = String(day).padStart(2, '0');
-  const mm = d.toLocaleDateString('en-GB', { month: 'short' });
-  return `${dd} ${mm} ${year}`;
+  return formatDisplayDate(dateStr);
 };
 
 // Format Date YYYY-MM-DD to Day Header (e.g. 1 SEP, 2 SEP, 15 SEP)
@@ -563,10 +546,12 @@ export const generateDailyAccountsPdf = (
   doc.text(`Date: ${formattedDate}`, leftMargin, currentY);
 
   // Metadata right aligned
-  const genTimestamp = new Date().toLocaleString('en-IN', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  const now = new Date();
+  const genTimestamp = `${formatDisplayDate(now)}, ${now.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  })}`;
   doc.setFontSize(7.5);
   doc.setTextColor(120, 120, 120);
   doc.text(`Generated: ${genTimestamp}`, pageWidth - rightMargin, currentY - 24, { align: 'right' });
@@ -1564,7 +1549,7 @@ export const generateClosingBalancePdf = (
   // ==================================================
   const totalPages = doc.getNumberOfPages();
   const now = new Date();
-  const dateFormatted = formatPdfDateMedium(now.toISOString().substring(0, 10));
+  const dateFormatted = formatDisplayDate(now);
   const timeFormatted = now.toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',

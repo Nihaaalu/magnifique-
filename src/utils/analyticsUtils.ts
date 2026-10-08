@@ -1,4 +1,5 @@
 import { IncomeRecord, ExpenseRecord } from '../types';
+import { formatDisplayDate } from './formatters';
 
 export interface IncomeDistributionItem {
   name: string;
@@ -528,15 +529,5 @@ export function computeDateRange(
 
 export function formatReadableDate(dateStr: string): string {
   if (!dateStr) return '';
-  const parts = dateStr.split('-');
-  if (parts.length !== 3) return dateStr;
-  const year = parseInt(parts[0], 10);
-  const month = parseInt(parts[1], 10) - 1;
-  const day = parseInt(parts[2], 10);
-  const d = new Date(year, month, day);
-  return d.toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  });
+  return formatDisplayDate(dateStr);
 }

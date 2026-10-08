@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { IncomeRecord, ExpenseRecord } from '../types';
+import { formatDisplayDate } from '../utils/formatters';
 import {
   IncomeDistributionResult,
   ExpenseDistributionResult,
@@ -362,11 +363,7 @@ export async function generateAnalyticsPDF(options: AnalyticsPdfOptions): Promis
 
   const now = new Date();
   const generatedTimeStr =
-    now.toLocaleDateString('en-GB', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    }) +
+    formatDisplayDate(now) +
     ', ' +
     now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 

@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { IncomeRecord, ExpenseRecord, Partner } from '../types';
+import { formatDisplayDate } from '../utils/formatters';
 import {
   normalizePartnerName,
   getEffectivePartners,
@@ -150,6 +151,38 @@ export function isFullyPaidIncome(r: IncomeRecord): boolean {
 }
 
 // ============================================================================
+// OTHER INCOME HELPER (DYNAMIC NON-PARTNER BY_WHO EXTRACTION)
+// ============================================================================
+
+const FIVE_OFFICIAL_PARTNERS = new Set([
+  'IRSHAD',
+  'ANSARI',
+  'MUSADDIQ',
+  'MUSSADDIQ',
+  'SATHISH',
+  'YOGESH',
+]);
+
+/**
+ * Checks if an income entry belongs to 'OTHER':
+ * - Received from a person/source who is NOT one of the five partners
+ * - Determined dynamically from income_entries.by_who (trimmed, case-insensitive)
+ * - Only includes fully paid income entries
+ */
+export function isOtherIncomeRecord(r: IncomeRecord): boolean {
+  if (!isFullyPaidIncome(r)) return false;
+
+  const rawByWho = String((r as any).by_who ?? r.byWho ?? '').trim();
+  if (!rawByWho) return false;
+
+  const upper = rawByWho.toUpperCase();
+  if (upper === 'À LA CARTE' || upper === 'A LA CARTE') return false;
+
+  const norm = normalizePartnerName(upper);
+  return !FIVE_OFFICIAL_PARTNERS.has(norm);
+}
+
+// ============================================================================
 // UNIVERSAL PARTNER ANALYTICS PDF GENERATOR
 // ============================================================================
 
@@ -170,6 +203,7 @@ export async function generatePartnerAnalyticsPDF(
 
   const normPartner = normalizePartnerName(partnerName);
   const isHotel = normPartner === 'HOTEL';
+  const isOther = normPartner === 'OTHER';
   const targetMonth = accountingMonth || startDate.substring(0, 7);
 
   const doc = new jsPDF({
@@ -185,11 +219,7 @@ export async function generatePartnerAnalyticsPDF(
 
   const now = new Date();
   const generatedTimeStr =
-    now.toLocaleDateString('en-GB', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    }) +
+    formatDisplayDate(now) +
     ', ' +
     now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -206,13 +236,25 @@ export async function generatePartnerAnalyticsPDF(
   const targetPartnerId = partnerObj?.id;
 
   // --------------------------------------------------------------------------
-  // 1. FILTER DATA CHRONOLOGICALLY FOR THIS PARTNER / HOTEL & ACCOUNTING MONTH
+  // 1. FILTER DATA CHRONOLOGICALLY FOR THIS PARTNER / HOTEL / OTHER & MONTH
   // --------------------------------------------------------------------------
   const partnerExpenses = expenseRecords.filter((r) => {
     const accMonth = getExpenseAccountingMonth(r);
     const dateMatch = accMonth ? accMonth === targetMonth : (r.date && r.date >= startDate && r.date <= endDate);
     if (!dateMatch) return false;
     return isExpensePaidByPartner(r, normPartner, targetPartnerId, idToNameMap);
+  });
+
+  // Sort expenses in chronological order: EARLIEST DATE -> LATEST DATE
+  partnerExpenses.sort((a, b) => {
+    const dateA = a.date || '';
+    const dateB = b.date || '';
+    if (dateA !== dateB) {
+      return dateA.localeCompare(dateB);
+    }
+    const createdA = (a as any).created_at || '';
+    const createdB = (b as any).created_at || '';
+    return createdA.localeCompare(createdB);
   });
 
   let totalExpense = 0;
@@ -225,7 +267,22 @@ export async function generatePartnerAnalyticsPDF(
     if (isHotel) {
       return isFullyPaidIncome(r);
     }
+    if (isOther) {
+      return isOtherIncomeRecord(r);
+    }
     return isIncomeAssignedToPartner(r, normPartner, targetPartnerId, idToNameMap);
+  });
+
+  // Sort income in chronological order: EARLIEST DATE -> LATEST DATE (01 -> 30)
+  partnerIncomes.sort((a, b) => {
+    const dateA = a.date || '';
+    const dateB = b.date || '';
+    if (dateA !== dateB) {
+      return dateA.localeCompare(dateB);
+    }
+    const createdA = (a as any).created_at || '';
+    const createdB = (b as any).created_at || '';
+    return createdA.localeCompare(createdB);
   });
 
   let totalIncomeBilled = 0;
@@ -233,8 +290,8 @@ export async function generatePartnerAnalyticsPDF(
   let totalIncomeBalance = 0;
   for (const inc of partnerIncomes) {
     const billed = Number(inc.total) || 0;
-    const received = Number(inc.amountPaid) || (isHotel ? billed : 0);
-    const bal = isHotel ? 0 : (Number(inc.balance) || 0);
+    const received = Number(inc.amountPaid) || (isHotel || isOther ? billed : 0);
+    const bal = isHotel || isOther ? 0 : (Number(inc.balance) || 0);
     totalIncomeBilled += billed;
     totalIncomeReceived += received;
     totalIncomeBalance += bal;
@@ -245,11 +302,19 @@ export async function generatePartnerAnalyticsPDF(
   // --------------------------------------------------------------------------
   // 2. HEADER DRAWING FUNCTION (Multi-page safe)
   // --------------------------------------------------------------------------
-  let reportTitle = isHotel ? 'HOTEL EXPENSE REPORT' : `${normPartner} EXPENSE REPORT`;
+  let reportTitle = isHotel ? 'HOTEL EXPENSE REPORT' : isOther ? 'OTHER EXPENSE REPORT' : `${normPartner} EXPENSE REPORT`;
   if (reportType === 'INCOME') {
-    reportTitle = isHotel ? 'HOTEL FULLY PAID INCOME REPORT' : `${normPartner} INCOME REPORT`;
+    reportTitle = isHotel
+      ? 'HOTEL FULLY PAID INCOME REPORT'
+      : isOther
+      ? 'OTHER FULLY PAID INCOME REPORT'
+      : `${normPartner} INCOME REPORT`;
   } else if (reportType === 'INCOME + EXPENSE') {
-    reportTitle = isHotel ? 'HOTEL INCOME & EXPENSE REPORT' : `${normPartner} INCOME & EXPENSE REPORT`;
+    reportTitle = isHotel
+      ? 'HOTEL INCOME & EXPENSE REPORT'
+      : isOther
+      ? 'OTHER INCOME & EXPENSE REPORT'
+      : `${normPartner} INCOME & EXPENSE REPORT`;
   }
 
   const drawnHeaders = new Set<number>();
@@ -320,13 +385,21 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(159, 18, 57);
-    doc.text(isHotel ? 'TOTAL HOTEL EXPENSE' : `TOTAL ${normPartner} EXPENSE`, margin + 6, curY + 5.5);
+    doc.text(
+      isHotel ? 'TOTAL HOTEL EXPENSE' : isOther ? 'TOTAL OTHER EXPENSE' : `TOTAL ${normPartner} EXPENSE`,
+      margin + 6,
+      curY + 5.5
+    );
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.8);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      isHotel ? 'Total expenses paid by HOTEL' : `Total expenses paid by ${normPartner}`,
+      isHotel
+        ? 'Total expenses paid by HOTEL'
+        : isOther
+        ? 'Total expenses paid by OTHER'
+        : `Total expenses paid by ${normPartner}`,
       margin + 6,
       curY + 12.0
     );
@@ -351,7 +424,11 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(10);
     doc.setTextColor(15, 23, 42);
     doc.text(
-      isHotel ? 'HOTEL EXPENSE BREAKDOWN BY PARTICULARS' : 'EXPENSE BREAKDOWN BY PARTICULARS / DESCRIPTION',
+      isHotel
+        ? 'HOTEL EXPENSE BREAKDOWN BY PARTICULARS'
+        : isOther
+        ? 'OTHER EXPENSE BREAKDOWN BY PARTICULARS'
+        : 'EXPENSE BREAKDOWN BY PARTICULARS / DESCRIPTION',
       margin + 5,
       curY + 2.5
     );
@@ -381,6 +458,8 @@ export async function generatePartnerAnalyticsPDF(
               '-',
               isHotel
                 ? 'No expenses recorded for HOTEL in this period'
+                : isOther
+                ? 'No expenses recorded for OTHER in this period'
                 : `No expenses recorded for ${normPartner} in this period`,
               'Rs. 0',
               '0.0%',
@@ -397,7 +476,7 @@ export async function generatePartnerAnalyticsPDF(
       foot: [
         [
           '',
-          isHotel ? 'TOTAL HOTEL EXPENSE' : `TOTAL ${normPartner} EXPENSE`,
+          isHotel ? 'TOTAL HOTEL EXPENSE' : isOther ? 'TOTAL OTHER EXPENSE' : `TOTAL ${normPartner} EXPENSE`,
           formatIndianCurrency(totalExpense),
           '100.0%',
         ],
@@ -436,6 +515,119 @@ export async function generatePartnerAnalyticsPDF(
         drawPageHeader(data.pageNumber);
       },
     });
+
+    // Detailed Expense Log Section (Dated records, chronological order: oldest -> newest)
+    const afterCategoryTable = (doc as any).lastAutoTable;
+    let detailSectionY = afterCategoryTable ? afterCategoryTable.finalY + 6.0 : curY + 20;
+
+    if (detailSectionY > pageHeight - 40) {
+      doc.addPage();
+      drawPageHeader(doc.getNumberOfPages());
+      detailSectionY = 28.5;
+    }
+
+    doc.setFillColor(244, 63, 94);
+    doc.circle(margin + 1.5, detailSectionY + 1.5, 1.5, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text(
+      isHotel
+        ? 'HOTEL DETAILED EXPENSE LOG'
+        : isOther
+        ? 'OTHER DETAILED EXPENSE LOG'
+        : `${normPartner} DETAILED EXPENSE LOG`,
+      margin + 5,
+      detailSectionY + 2.5
+    );
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `${partnerExpenses.length} Expense Entries • Total: ${formatIndianCurrency(totalExpense)}`,
+      pageWidth - margin,
+      detailSectionY + 2.5,
+      { align: 'right' }
+    );
+
+    detailSectionY += 5.0;
+
+    const detailedExpenseRows =
+      partnerExpenses.length > 0
+        ? partnerExpenses.map((item, idx) => {
+            const rawDesc = (item.description || item.name || item.category || 'EXPENSE').trim().toUpperCase();
+            const itemAmount = Number(item.amount) || 0;
+            return [
+              String(idx + 1),
+              formatDisplayDate(item.date) || '',
+              rawDesc,
+              formatIndianCurrency(itemAmount),
+            ];
+          })
+        : [
+            [
+              '-',
+              '-',
+              isHotel
+                ? 'No expenses recorded for HOTEL in this period'
+                : isOther
+                ? 'No expenses recorded for OTHER in this period'
+                : `No expenses recorded for ${normPartner} in this period`,
+              'Rs. 0',
+            ],
+          ];
+
+    autoTable(doc, {
+      startY: detailSectionY,
+      margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
+      showHead: 'everyPage',
+      showFoot: 'lastPage',
+      head: [['#', 'DATE', 'PARTICULARS / DESCRIPTION', 'AMOUNT (INR)']],
+      body: detailedExpenseRows,
+      foot: [
+        [
+          '',
+          '',
+          isHotel ? 'TOTAL HOTEL EXPENSE' : isOther ? 'TOTAL OTHER EXPENSE' : `TOTAL ${normPartner} EXPENSE`,
+          formatIndianCurrency(totalExpense),
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 7.2,
+        cellPadding: { top: 1.4, bottom: 1.4, left: 2.0, right: 2.0 },
+        minCellHeight: 5.2,
+        lineColor: [226, 232, 240],
+        lineWidth: 0.2,
+        textColor: [30, 41, 59],
+      },
+      headStyles: {
+        fillColor: [26, 26, 26],
+        textColor: [242, 201, 76],
+        fontStyle: 'bold',
+        fontSize: 7.5,
+        cellPadding: { top: 1.6, bottom: 1.6, left: 2.0, right: 2.0 },
+      },
+      footStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: 7.5,
+        cellPadding: { top: 1.6, bottom: 1.6, left: 2.0, right: 2.0 },
+      },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'center' },
+        1: { cellWidth: 26 },
+        2: { cellWidth: 'auto', fontStyle: 'bold' },
+        3: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
+      },
+      didDrawPage: (data) => {
+        drawPageHeader(data.pageNumber);
+      },
+    });
   }
 
   // ==========================================================================
@@ -455,7 +647,11 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(7.5);
     doc.setTextColor(20, 83, 45);
     doc.text(
-      isHotel ? 'TOTAL HOTEL INCOME' : `TOTAL ${normPartner} INCOME BALANCE ASSIGNED`,
+      isHotel
+        ? 'TOTAL HOTEL INCOME'
+        : isOther
+        ? 'TOTAL OTHER INCOME'
+        : `TOTAL ${normPartner} INCOME BALANCE ASSIGNED`,
       margin + 6,
       curY + 5.5
     );
@@ -466,6 +662,8 @@ export async function generatePartnerAnalyticsPDF(
     doc.text(
       isHotel
         ? 'Total fully paid income received by Hotel'
+        : isOther
+        ? 'Total fully paid income from non-partner sources'
         : `Billed: ${formatIndianCurrency(totalIncomeBilled)}  |  Received: ${formatIndianCurrency(totalIncomeReceived)}`,
       margin + 6,
       curY + 12.0
@@ -475,7 +673,7 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(13);
     doc.setTextColor(22, 101, 52);
     doc.text(
-      `Rs. ${formatIndianNumber(isHotel ? totalIncomeBilled : totalIncomeBalance)}`,
+      `Rs. ${formatIndianNumber(isHotel || isOther ? totalIncomeBilled : totalIncomeBalance)}`,
       pageWidth - margin - 6,
       curY + 10.5,
       { align: 'right' }
@@ -491,7 +689,11 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(10);
     doc.setTextColor(15, 23, 42);
     doc.text(
-      isHotel ? 'FULLY PAID INCOME RECEIVED BY HOTEL' : `INCOME RECORDS ASSIGNED TO ${normPartner}`,
+      isHotel
+        ? 'FULLY PAID INCOME RECEIVED BY HOTEL'
+        : isOther
+        ? 'FULLY PAID INCOME FROM OTHER SOURCES'
+        : `INCOME RECORDS ASSIGNED TO ${normPartner}`,
       margin + 5,
       curY + 2.5
     );
@@ -500,7 +702,7 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(7.8);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      isHotel
+      isHotel || isOther
         ? `${partnerIncomes.length} Entries • Total Received: ${formatIndianCurrency(totalIncomeReceived)}`
         : `${partnerIncomes.length} Entries • Total Balance: ${formatIndianCurrency(totalIncomeBalance)}`,
       pageWidth - margin,
@@ -513,13 +715,16 @@ export async function generatePartnerAnalyticsPDF(
     const incomeRows =
       partnerIncomes.length > 0
         ? partnerIncomes.map((item, idx) => {
-            const particulars = item.travels || (item.byWho ? `By ${item.byWho}` : '') || item.incomeType || 'Direct';
+            const rawBy = (item.byWho || (item as any).by_who || '').trim();
+            const particulars = item.travels
+              ? (rawBy ? `${item.travels} (${rawBy})` : item.travels)
+              : (rawBy ? `By ${rawBy}` : (item.incomeType || 'Direct'));
             const itemBilled = Number(item.total) || 0;
-            const itemReceived = Number(item.amountPaid) || (isHotel ? itemBilled : 0);
-            const itemBal = isHotel ? 0 : (Number(item.balance) || 0);
+            const itemReceived = Number(item.amountPaid) || (isHotel || isOther ? itemBilled : 0);
+            const itemBal = isHotel || isOther ? 0 : (Number(item.balance) || 0);
             return [
               String(idx + 1),
-              item.date || '',
+              formatDisplayDate(item.date) || '',
               particulars,
               formatIndianCurrency(itemBilled),
               formatIndianCurrency(itemReceived),
@@ -532,6 +737,8 @@ export async function generatePartnerAnalyticsPDF(
               '-',
               isHotel
                 ? 'No fully paid income records in this period'
+                : isOther
+                ? 'No fully paid income records from other sources in this period'
                 : `No income records assigned to ${normPartner} in this period`,
               'Rs. 0',
               'Rs. 0',
@@ -550,17 +757,17 @@ export async function generatePartnerAnalyticsPDF(
         'PARTICULARS / CUSTOMER',
         'BILLED (INR)',
         'RECEIVED (INR)',
-        isHotel ? 'BALANCE (INR)' : 'BALANCE ASSIGNED (INR)',
+        isHotel || isOther ? 'BALANCE (INR)' : 'BALANCE ASSIGNED (INR)',
       ]],
       body: incomeRows,
       foot: [
         [
           '',
           '',
-          isHotel ? 'TOTAL HOTEL INCOME' : `TOTAL ${normPartner} INCOME`,
+          isHotel ? 'TOTAL HOTEL INCOME' : isOther ? 'TOTAL OTHER INCOME' : `TOTAL ${normPartner} INCOME`,
           formatIndianCurrency(totalIncomeBilled),
           formatIndianCurrency(totalIncomeReceived),
-          formatIndianCurrency(isHotel ? 0 : totalIncomeBalance),
+          formatIndianCurrency(isHotel || isOther ? 0 : totalIncomeBalance),
         ],
       ],
       theme: 'grid',
@@ -619,11 +826,15 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.8);
     doc.setTextColor(20, 83, 45);
-    doc.text(isHotel ? 'FULLY PAID INCOME RECEIVED' : 'INCOME BALANCE ASSIGNED', margin + 4.5, curY + 4.8);
+    doc.text(
+      isHotel || isOther ? 'FULLY PAID INCOME RECEIVED' : 'INCOME BALANCE ASSIGNED',
+      margin + 4.5,
+      curY + 4.8
+    );
     doc.setFontSize(10.5);
     doc.setTextColor(22, 101, 52);
     doc.text(
-      `Rs. ${formatIndianNumber(isHotel ? totalIncomeReceived : totalIncomeBalance)}`,
+      `Rs. ${formatIndianNumber(isHotel || isOther ? totalIncomeReceived : totalIncomeBalance)}`,
       margin + 4.5,
       curY + 11.5
     );
@@ -631,7 +842,7 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(5.8);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      isHotel ? `${partnerIncomes.length} fully paid entries` : `${partnerIncomes.length} income entries`,
+      isHotel || isOther ? `${partnerIncomes.length} fully paid entries` : `${partnerIncomes.length} income entries`,
       margin + 4.5,
       curY + 15.0
     );
@@ -646,7 +857,11 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.8);
     doc.setTextColor(159, 18, 57);
-    doc.text(isHotel ? 'TOTAL HOTEL EXPENSES' : 'TOTAL EXPENSES PAID', card2X + 4.5, curY + 4.8);
+    doc.text(
+      isHotel ? 'TOTAL HOTEL EXPENSES' : isOther ? 'TOTAL OTHER EXPENSES' : 'TOTAL EXPENSES PAID',
+      card2X + 4.5,
+      curY + 4.8
+    );
     doc.setFontSize(10.5);
     doc.setTextColor(225, 29, 72);
     doc.text(`Rs. ${formatIndianNumber(totalExpense)}`, card2X + 4.5, curY + 11.5);
@@ -657,7 +872,8 @@ export async function generatePartnerAnalyticsPDF(
 
     // Card 3: Net Operational Balance / Net Position
     const card3X = card2X + cardW + 3;
-    const netDifference = isHotel ? (totalIncomeReceived - totalExpense) : (totalIncomeBalance - totalExpense);
+    const netDifference =
+      isHotel || isOther ? (totalIncomeReceived - totalExpense) : (totalIncomeBalance - totalExpense);
     doc.setFillColor(254, 243, 199);
     doc.setDrawColor(253, 230, 138);
     doc.roundedRect(card3X, curY, cardW, summaryCardH, 2, 2, 'FD');
@@ -666,7 +882,11 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.8);
     doc.setTextColor(146, 64, 14);
-    doc.text(isHotel ? 'NET HOTEL POSITION' : 'NET OPERATIONAL BALANCE', card3X + 4.5, curY + 4.8);
+    doc.text(
+      isHotel ? 'NET HOTEL POSITION' : isOther ? 'NET OTHER POSITION' : 'NET OPERATIONAL BALANCE',
+      card3X + 4.5,
+      curY + 4.8
+    );
     doc.setFontSize(10.5);
     doc.setTextColor(180, 83, 9);
     doc.text(`Rs. ${formatIndianNumber(netDifference)}`, card3X + 4.5, curY + 11.5);
@@ -674,7 +894,7 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(5.8);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      isHotel
+      isHotel || isOther
         ? (netDifference >= 0 ? 'Surplus / Net Profit' : 'Deficit / Net Loss')
         : (netDifference >= 0 ? `${normPartner} to Hotel` : `Hotel to ${normPartner}`),
       card3X + 4.5,
@@ -690,7 +910,7 @@ export async function generatePartnerAnalyticsPDF(
     doc.setFontSize(9.5);
     doc.setTextColor(15, 23, 42);
     doc.text(
-      isHotel ? '1. FULLY PAID INCOME RECEIVED' : '1. INCOME ASSIGNED BREAKDOWN',
+      isHotel || isOther ? '1. FULLY PAID INCOME RECEIVED' : '1. INCOME ASSIGNED BREAKDOWN',
       margin + 5,
       curY + 2.5
     );
@@ -700,13 +920,16 @@ export async function generatePartnerAnalyticsPDF(
     const incomeRows =
       partnerIncomes.length > 0
         ? partnerIncomes.map((item, idx) => {
-            const particulars = item.travels || (item.byWho ? `By ${item.byWho}` : '') || item.incomeType || 'Direct';
+            const rawBy = (item.byWho || (item as any).by_who || '').trim();
+            const particulars = item.travels
+              ? (rawBy ? `${item.travels} (${rawBy})` : item.travels)
+              : (rawBy ? `By ${rawBy}` : (item.incomeType || 'Direct'));
             const itemBilled = Number(item.total) || 0;
-            const itemReceived = Number(item.amountPaid) || (isHotel ? itemBilled : 0);
-            const itemBal = isHotel ? 0 : (Number(item.balance) || 0);
+            const itemReceived = Number(item.amountPaid) || (isHotel || isOther ? itemBilled : 0);
+            const itemBal = isHotel || isOther ? 0 : (Number(item.balance) || 0);
             return [
               String(idx + 1),
-              item.date || '',
+              formatDisplayDate(item.date) || '',
               particulars,
               formatIndianCurrency(itemBilled),
               formatIndianCurrency(itemReceived),
@@ -719,6 +942,8 @@ export async function generatePartnerAnalyticsPDF(
               '-',
               isHotel
                 ? 'No fully paid income records in this period'
+                : isOther
+                ? 'No fully paid income records from other sources in this period'
                 : `No income records assigned to ${normPartner} in this period`,
               'Rs. 0',
               'Rs. 0',
@@ -731,16 +956,16 @@ export async function generatePartnerAnalyticsPDF(
       margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
       showHead: 'everyPage',
       showFoot: 'lastPage',
-      head: [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED', 'RECEIVED', isHotel ? 'BALANCE' : 'BALANCE ASSIGNED']],
+      head: [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED', 'RECEIVED', isHotel || isOther ? 'BALANCE' : 'BALANCE ASSIGNED']],
       body: incomeRows,
       foot: [
         [
           '',
           '',
-          isHotel ? 'TOTAL HOTEL INCOME' : 'TOTAL INCOME ASSIGNED',
+          isHotel ? 'TOTAL HOTEL INCOME' : isOther ? 'TOTAL OTHER INCOME' : 'TOTAL INCOME ASSIGNED',
           formatIndianCurrency(totalIncomeBilled),
           formatIndianCurrency(totalIncomeReceived),
-          formatIndianCurrency(isHotel ? 0 : totalIncomeBalance),
+          formatIndianCurrency(isHotel || isOther ? 0 : totalIncomeBalance),
         ],
       ],
       theme: 'grid',
@@ -864,6 +1089,114 @@ export async function generatePartnerAnalyticsPDF(
         1: { cellWidth: 'auto', fontStyle: 'bold' },
         2: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
         3: { cellWidth: 28, halign: 'right', fontStyle: 'bold' },
+      },
+      didDrawPage: (data) => {
+        drawPageHeader(data.pageNumber);
+      },
+    });
+
+    // SECTION C: DETAILED EXPENSE LOG (Dated records, chronological order: oldest -> newest)
+    const afterExpenseBreakdown = (doc as any).lastAutoTable;
+    let detailSectionY = afterExpenseBreakdown ? afterExpenseBreakdown.finalY + 6.0 : nextY + 20;
+
+    if (detailSectionY > pageHeight - 40) {
+      doc.addPage();
+      drawPageHeader(doc.getNumberOfPages());
+      detailSectionY = 28.5;
+    }
+
+    doc.setFillColor(244, 63, 94);
+    doc.circle(margin + 1.5, detailSectionY + 1.5, 1.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(
+      isHotel
+        ? '3. HOTEL DETAILED EXPENSE LOG'
+        : isOther
+        ? '3. OTHER DETAILED EXPENSE LOG'
+        : '3. DETAILED EXPENSE LOG',
+      margin + 5,
+      detailSectionY + 2.5
+    );
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `${partnerExpenses.length} Expense Entries • Total: ${formatIndianCurrency(totalExpense)}`,
+      pageWidth - margin,
+      detailSectionY + 2.5,
+      { align: 'right' }
+    );
+
+    detailSectionY += 4.5;
+
+    const detailedExpenseRows =
+      partnerExpenses.length > 0
+        ? partnerExpenses.map((item, idx) => {
+            const rawDesc = (item.description || item.name || item.category || 'EXPENSE').trim().toUpperCase();
+            const itemAmount = Number(item.amount) || 0;
+            return [
+              String(idx + 1),
+              formatDisplayDate(item.date) || '',
+              rawDesc,
+              formatIndianCurrency(itemAmount),
+            ];
+          })
+        : [
+            [
+              '-',
+              '-',
+              isHotel
+                ? 'No expenses recorded for HOTEL in this period'
+                : `No expenses recorded for ${normPartner} in this period`,
+              'Rs. 0',
+            ],
+          ];
+
+    autoTable(doc, {
+      startY: detailSectionY,
+      margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
+      showHead: 'everyPage',
+      showFoot: 'lastPage',
+      head: [['#', 'DATE', 'PARTICULARS / DESCRIPTION', 'AMOUNT (INR)']],
+      body: detailedExpenseRows,
+      foot: [
+        [
+          '',
+          '',
+          isHotel ? 'TOTAL HOTEL EXPENSES' : `TOTAL ${normPartner} EXPENSES`,
+          formatIndianCurrency(totalExpense),
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 6.8,
+        cellPadding: { top: 1.2, bottom: 1.2, left: 1.8, right: 1.8 },
+        minCellHeight: 4.8,
+        lineColor: [226, 232, 240],
+        lineWidth: 0.2,
+        textColor: [30, 41, 59],
+      },
+      headStyles: {
+        fillColor: [26, 26, 26],
+        textColor: [242, 201, 76],
+        fontStyle: 'bold',
+        fontSize: 7.0,
+      },
+      footStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: 7.0,
+      },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'center' },
+        1: { cellWidth: 26 },
+        2: { cellWidth: 'auto', fontStyle: 'bold' },
+        3: { cellWidth: 44, halign: 'right', fontStyle: 'bold' },
       },
       didDrawPage: (data) => {
         drawPageHeader(data.pageNumber);

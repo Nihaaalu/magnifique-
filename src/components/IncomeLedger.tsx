@@ -29,6 +29,7 @@ import {
 import {
   formatCurrency,
   formatDateDisplay,
+  formatDisplayDate,
   getTodayDateString,
 } from '../utils/formatters';
 import { isMonthClosed } from '../utils/accountBalanceUtils';
@@ -689,6 +690,11 @@ export const IncomeLedger: React.FC<IncomeLedgerProps> = ({
             <span className="font-bold text-[#F5F5F5] text-xs sm:text-sm tracking-wide">
               {details.title}
             </span>
+            {periodMode !== 'day' && record.date && (
+              <span className="text-[10px] text-[#A3A3A3] font-semibold bg-[#222222] px-1.5 py-0.5 rounded border border-[#333333]">
+                {formatDisplayDate(record.date)}
+              </span>
+            )}
           </div>
 
           {/* Middle Line: Simplified Prices Breakdown / Travels */}

@@ -1,3 +1,7 @@
+import { formatDisplayDate, formatDateDisplay } from './formatters';
+
+export { formatDisplayDate, formatDateDisplay };
+
 export type LedgerPeriodMode = 'day' | 'week' | 'month' | 'custom';
 
 export interface DateRange {
@@ -39,13 +43,7 @@ export const getNextDay = (dateStr: string): string => {
 };
 
 export const formatDayHeader = (dateStr: string): string => {
-  const date = parseISODate(dateStr);
-  return date.toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  }).toUpperCase();
+  return formatDisplayDate(dateStr);
 };
 
 /**
@@ -82,21 +80,7 @@ export const getNextWeekDate = (dateStr: string): string => {
 };
 
 export const formatWeekHeader = (startDateStr: string, endDateStr: string): string => {
-  const start = parseISODate(startDateStr);
-  const end = parseISODate(endDateStr);
-
-  const startMonth = start.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-  const endMonth = end.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-  const startYear = start.getFullYear();
-  const endYear = end.getFullYear();
-
-  if (startMonth === endMonth && startYear === endYear) {
-    return `${startMonth} ${start.getDate()} - ${end.getDate()}, ${startYear}`;
-  } else if (startYear === endYear) {
-    return `${startMonth} ${start.getDate()} - ${endMonth} ${end.getDate()}, ${startYear}`;
-  } else {
-    return `${startMonth} ${start.getDate()}, ${startYear} - ${endMonth} ${end.getDate()}, ${endYear}`;
-  }
+  return `${formatDisplayDate(startDateStr)} - ${formatDisplayDate(endDateStr)}`;
 };
 
 /**
