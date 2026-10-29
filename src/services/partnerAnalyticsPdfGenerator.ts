@@ -995,6 +995,8 @@ export async function generatePartnerAnalyticsPDF(
 
     curY += 4.5;
 
+    const isIndividualPartner = !isHotel && !isOther;
+
     const incomeRows =
       partnerIncomes.length > 0
         ? partnerIncomes.map((item, idx) => {
@@ -1005,6 +1007,19 @@ export async function generatePartnerAnalyticsPDF(
             const itemBilled = Number(item.total) || 0;
             const itemReceived = Number(item.amountPaid) || (isHotel || isOther ? itemBilled : 0);
             const itemBal = isHotel || isOther ? 0 : (Number(item.balance) || 0);
+
+            if (isIndividualPartner) {
+              return [
+                String(idx + 1),
+                formatDisplayDate(item.date) || '',
+                particulars,
+                formatPartnerIncomeMealsPersons(item),
+                formatIndianCurrency(itemBilled),
+                formatIndianCurrency(itemReceived),
+                formatIndianCurrency(itemBal),
+              ];
+            }
+
             return [
               String(idx + 1),
               formatDisplayDate(item.date) || '',
@@ -1015,18 +1030,26 @@ export async function generatePartnerAnalyticsPDF(
             ];
           })
         : [
-            [
-              '-',
-              '-',
-              isHotel
-                ? 'No fully paid income records in this period'
-                : isOther
-                ? 'No fully paid income records from other sources in this period'
-                : `No income records assigned to ${normPartner} in this period`,
-              'Rs. 0',
-              'Rs. 0',
-              'Rs. 0',
-            ],
+            isIndividualPartner
+              ? [
+                  '-',
+                  '-',
+                  `No income records assigned to ${normPartner} in this period`,
+                  '-',
+                  'Rs. 0',
+                  'Rs. 0',
+                  'Rs. 0',
+                ]
+              : [
+                  '-',
+                  '-',
+                  isHotel
+                    ? 'No fully paid income records in this period'
+                    : 'No fully paid income records from other sources in this period',
+                  'Rs. 0',
+                  'Rs. 0',
+                  'Rs. 0',
+                ],
           ];
 
     autoTable(doc, {
@@ -1034,18 +1057,32 @@ export async function generatePartnerAnalyticsPDF(
       margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
       showHead: 'everyPage',
       showFoot: 'lastPage',
-      head: [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED', 'RECEIVED', isHotel || isOther ? 'BALANCE' : 'BALANCE ASSIGNED']],
+      head: isIndividualPartner
+        ? [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'MEALS / PERSONS', 'BILLED', 'RECEIVED', 'BALANCE ASSIGNED']]
+        : [['#', 'DATE', 'PARTICULARS / CUSTOMER', 'BILLED', 'RECEIVED', isHotel || isOther ? 'BALANCE' : 'BALANCE ASSIGNED']],
       body: incomeRows,
-      foot: [
-        [
-          '',
-          '',
-          isHotel ? 'TOTAL HOTEL INCOME' : isOther ? 'TOTAL OTHER INCOME' : 'TOTAL INCOME ASSIGNED',
-          formatIndianCurrency(totalIncomeBilled),
-          formatIndianCurrency(totalIncomeReceived),
-          formatIndianCurrency(isHotel || isOther ? 0 : totalIncomeBalance),
-        ],
-      ],
+      foot: isIndividualPartner
+        ? [
+            [
+              '',
+              '',
+              'TOTAL INCOME ASSIGNED',
+              '',
+              formatIndianCurrency(totalIncomeBilled),
+              formatIndianCurrency(totalIncomeReceived),
+              formatIndianCurrency(totalIncomeBalance),
+            ],
+          ]
+        : [
+            [
+              '',
+              '',
+              isHotel ? 'TOTAL HOTEL INCOME' : isOther ? 'TOTAL OTHER INCOME' : 'TOTAL INCOME ASSIGNED',
+              formatIndianCurrency(totalIncomeBilled),
+              formatIndianCurrency(totalIncomeReceived),
+              formatIndianCurrency(isHotel || isOther ? 0 : totalIncomeBalance),
+            ],
+          ],
       theme: 'grid',
       styles: {
         font: 'helvetica',
@@ -1068,14 +1105,24 @@ export async function generatePartnerAnalyticsPDF(
         fontStyle: 'bold',
         fontSize: 7.0,
       },
-      columnStyles: {
-        0: { cellWidth: 10, halign: 'center' },
-        1: { cellWidth: 22 },
-        2: { cellWidth: 'auto', fontStyle: 'bold' },
-        3: { cellWidth: 26, halign: 'right' },
-        4: { cellWidth: 26, halign: 'right' },
-        5: { cellWidth: 32, halign: 'right', fontStyle: 'bold' },
-      },
+      columnStyles: isIndividualPartner
+        ? {
+            0: { cellWidth: 9, halign: 'center' },
+            1: { cellWidth: 19 },
+            2: { cellWidth: 'auto', fontStyle: 'bold' },
+            3: { cellWidth: 22, halign: 'center' },
+            4: { cellWidth: 25, halign: 'right' },
+            5: { cellWidth: 25, halign: 'right' },
+            6: { cellWidth: 28, halign: 'right', fontStyle: 'bold' },
+          }
+        : {
+            0: { cellWidth: 10, halign: 'center' },
+            1: { cellWidth: 22 },
+            2: { cellWidth: 'auto', fontStyle: 'bold' },
+            3: { cellWidth: 26, halign: 'right' },
+            4: { cellWidth: 26, halign: 'right' },
+            5: { cellWidth: 32, halign: 'right', fontStyle: 'bold' },
+          },
       didDrawPage: (data) => {
         drawPageHeader(data.pageNumber);
       },
