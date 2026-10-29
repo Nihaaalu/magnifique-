@@ -61,23 +61,36 @@ export interface PartnerAnalyticsPdfOptions {
 
 /**
  * Normalizes an expense description according to partner grouping rules:
- * 1. VEGETABLES GROUP -> "VEGETABLES"
- * 2. CAKE GROUP -> "CAKE"
- * 3. DJ GROUP -> "DJ"
- * 4. ALL OTHER DESCRIPTIONS -> distinct normalized description
+ * 1. ADVANCE GROUP -> Any expense whose description contains "ADVANCE" (case-insensitive, e.g. "YOGESH ADVANCE", "TEJAS ADVANCE", "GAGAN ADVANCE")
+ * 2. VEGETABLES GROUP -> "VEGETABLES"
+ * 3. CAKE GROUP -> "CAKE"
+ * 4. DJ GROUP -> "DJ"
+ * 5. ALL OTHER DESCRIPTIONS -> distinct normalized description
  */
 export function normalizePartnerExpenseDescription(rawDesc: string): string {
-  const cleaned = rawDesc.trim().toUpperCase().replace(/\s+/g, ' ');
+  const cleaned = rawDesc.trim().toUpperCase().replace(/[_\s]+/g, ' ');
 
+  // 1. ADVANCE group: Any expense containing the word ADVANCE (case-insensitive whole-word match)
+  // e.g. "YOGESH ADVANCE", "TEJAS ADVANCE", "GAGAN ADVANCE", "ADVANCE TO [NAME]", etc.
+  if (/\bADVANCES?\b/i.test(cleaned)) {
+    return 'ADVANCE';
+  }
+
+  // 2. VEGETABLES group
   if (/^VEGETABLES?(\s*\(\s*\d+\s*\))?$/i.test(cleaned)) {
     return 'VEGETABLES';
   }
+
+  // 3. CAKE group
   if (/\bCAKES?\b/i.test(cleaned)) {
     return 'CAKE';
   }
+
+  // 4. DJ group
   if (/\bDJ\b/i.test(cleaned)) {
     return 'DJ';
   }
+
   return cleaned;
 }
 
@@ -91,7 +104,15 @@ export function groupPartnerExpenses(
   const map = new Map<string, { name: string; amount: number; count: number }>();
 
   for (const exp of expenses) {
-    const rawDesc = (exp.description || exp.name || exp.category || 'EXPENSE').trim();
+    const rawDesc = (
+      exp.description ||
+      (exp as any).description ||
+      exp.name ||
+      (exp as any).name ||
+      exp.category ||
+      (exp as any).category ||
+      'EXPENSE'
+    ).trim();
     const normKey = normalizePartnerExpenseDescription(rawDesc);
 
     const existing = map.get(normKey);
