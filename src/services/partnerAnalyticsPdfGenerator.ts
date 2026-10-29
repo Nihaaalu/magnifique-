@@ -183,6 +183,142 @@ export function isOtherIncomeRecord(r: IncomeRecord): boolean {
 }
 
 // ============================================================================
+// PARTNER INCOME MEALS / PERSONS FORMATTER
+// ============================================================================
+
+/**
+ * Formats the MEALS / PERSONS column for individual partner income report:
+ * e.g. "B (28)", "L (28)", "D (28)", "BD (28)", "BL (28)", "LD (28)", "BLD (28)".
+ * Displays "NA" for:
+ * - À LA CARTE entries
+ * - OTHER entries
+ * - Records that do not represent a valid meal booking
+ * - Records without a valid meal combination or usable person count (> 0)
+ * Never displays undefined, null, NaN, 0 persons, or empty cells.
+ */
+export function formatPartnerIncomeMealsPersons(item: IncomeRecord): string {
+  if (!item) return 'NA';
+
+  // 1. Check for À LA CARTE entries
+  const isAlaCarte =
+    item.incomeType === 'À La Carte' ||
+    (item as any).income_type === 'alacarte' ||
+    item.mealPlan === 'alacarte' ||
+    (item as any).meal_plan === 'alacarte' ||
+    (typeof item.byWho === 'string' &&
+      (item.byWho.trim().toUpperCase() === 'À LA CARTE' ||
+        item.byWho.trim().toUpperCase() === 'A LA CARTE')) ||
+    (typeof (item as any).by_who === 'string' &&
+      ((item as any).by_who.trim().toUpperCase() === 'À LA CARTE' ||
+        (item as any).by_who.trim().toUpperCase() === 'A LA CARTE'));
+
+  if (isAlaCarte) {
+    return 'NA';
+  }
+
+  // 2. Check for OTHER entries (e.g. meal_plan: 'other' or custom tea/groceries)
+  const isOther =
+    item.mealPlan === 'other' ||
+    (item as any).meal_plan === 'other' ||
+    (item as any).income_type === 'other';
+
+  if (isOther) {
+    return 'NA';
+  }
+
+  // 3. Person count validation: must be finite and > 0
+  const rawCount = item.membersCount != null ? item.membersCount : (item as any).member_count;
+  const count = Number(rawCount);
+  if (!Number.isFinite(count) || count <= 0) {
+    return 'NA';
+  }
+
+  // 4. Map meal combination code
+  let code: string | null = null;
+  const rawComb = String(item.mealCombination ?? (item as any).meal_combination ?? '')
+    .toLowerCase()
+    .trim();
+  const rawPlan = String(item.mealPlan ?? (item as any).meal_plan ?? '')
+    .toLowerCase()
+    .trim();
+
+  if (rawComb === 'breakfast' || rawComb === 'b') {
+    code = 'B';
+  } else if (rawComb === 'lunch' || rawComb === 'l') {
+    code = 'L';
+  } else if (rawComb === 'dinner' || rawComb === 'd') {
+    code = 'D';
+  } else if (rawComb === 'breakfast_dinner' || rawComb === 'bd') {
+    code = 'BD';
+  } else if (rawComb === 'breakfast_lunch' || rawComb === 'bl') {
+    code = 'BL';
+  } else if (rawComb === 'lunch_dinner' || rawComb === 'ld') {
+    code = 'LD';
+  } else if (rawComb === 'all' || rawComb === 'bld') {
+    code = 'BLD';
+  }
+
+  // Reliable fallbacks if mealCombination is not explicitly set:
+  if (!code) {
+    if (rawPlan === '3_time') {
+      code = 'BLD';
+    } else if (rawPlan === '2_time') {
+      const bPrice = Number(item.breakfastPrice ?? (item as any).breakfast_price);
+      const lPrice = Number(item.lunchPrice ?? (item as any).lunch_price);
+      const dPrice = Number(item.dinnerPrice ?? (item as any).dinner_price);
+      const hasB = Number.isFinite(bPrice) && bPrice > 0;
+      const hasL = Number.isFinite(lPrice) && lPrice > 0;
+      const hasD = Number.isFinite(dPrice) && dPrice > 0;
+
+      if (hasB && hasL) code = 'BL';
+      else if (hasB && hasD) code = 'BD';
+      else if (hasL && hasD) code = 'LD';
+    } else if (rawPlan === '1_time') {
+      const mt = String(item.mealType ?? (item as any).meal_type ?? '').toLowerCase().trim();
+      if (mt === 'lunch') code = 'L';
+      else if (mt === 'dinner') code = 'D';
+      else if (mt === 'breakfast') code = 'B';
+      else {
+        const bPrice = Number(item.breakfastPrice ?? (item as any).breakfast_price);
+        const lPrice = Number(item.lunchPrice ?? (item as any).lunch_price);
+        const dPrice = Number(item.dinnerPrice ?? (item as any).dinner_price);
+        if (Number.isFinite(lPrice) && lPrice > 0) code = 'L';
+        else if (Number.isFinite(dPrice) && dPrice > 0) code = 'D';
+        else if (Number.isFinite(bPrice) && bPrice > 0) code = 'B';
+      }
+    } else {
+      // Legacy records fallback
+      const mt = String(item.mealType ?? (item as any).meal_type ?? '').toLowerCase().trim();
+      if (mt === 'lunch') code = 'L';
+      else if (mt === 'dinner') code = 'D';
+      else if (mt === 'breakfast') code = 'B';
+      else {
+        const bPrice = Number(item.breakfastPrice ?? (item as any).breakfast_price);
+        const lPrice = Number(item.lunchPrice ?? (item as any).lunch_price);
+        const dPrice = Number(item.dinnerPrice ?? (item as any).dinner_price);
+        const hasB = Number.isFinite(bPrice) && bPrice > 0;
+        const hasL = Number.isFinite(lPrice) && lPrice > 0;
+        const hasD = Number.isFinite(dPrice) && dPrice > 0;
+
+        if (hasB && hasL && hasD) code = 'BLD';
+        else if (hasB && hasL) code = 'BL';
+        else if (hasB && hasD) code = 'BD';
+        else if (hasL && hasD) code = 'LD';
+        else if (hasL) code = 'L';
+        else if (hasD) code = 'D';
+        else if (hasB) code = 'B';
+      }
+    }
+  }
+
+  if (!code) {
+    return 'NA';
+  }
+
+  return `${code} (${Math.round(count)})`;
+}
+
+// ============================================================================
 // UNIVERSAL PARTNER ANALYTICS PDF GENERATOR
 // ============================================================================
 
@@ -599,6 +735,8 @@ export async function generatePartnerAnalyticsPDF(
 
     curY += 5.0;
 
+    const isIndividualPartnerIncome = !isHotel && !isOther;
+
     const incomeRows =
       partnerIncomes.length > 0
         ? partnerIncomes.map((item, idx) => {
@@ -609,6 +747,19 @@ export async function generatePartnerAnalyticsPDF(
             const itemBilled = Number(item.total) || 0;
             const itemReceived = Number(item.amountPaid) || (isHotel || isOther ? itemBilled : 0);
             const itemBal = isHotel || isOther ? 0 : (Number(item.balance) || 0);
+
+            if (isIndividualPartnerIncome) {
+              return [
+                String(idx + 1),
+                formatDisplayDate(item.date) || '',
+                particulars,
+                formatPartnerIncomeMealsPersons(item),
+                formatIndianCurrency(itemBilled),
+                formatIndianCurrency(itemReceived),
+                formatIndianCurrency(itemBal),
+              ];
+            }
+
             return [
               String(idx + 1),
               formatDisplayDate(item.date) || '',
@@ -619,18 +770,26 @@ export async function generatePartnerAnalyticsPDF(
             ];
           })
         : [
-            [
-              '-',
-              '-',
-              isHotel
-                ? 'No fully paid income records in this period'
-                : isOther
-                ? 'No fully paid income records from other sources in this period'
-                : `No income records assigned to ${normPartner} in this period`,
-              'Rs. 0',
-              'Rs. 0',
-              'Rs. 0',
-            ],
+            isIndividualPartnerIncome
+              ? [
+                  '-',
+                  '-',
+                  `No income records assigned to ${normPartner} in this period`,
+                  '-',
+                  'Rs. 0',
+                  'Rs. 0',
+                  'Rs. 0',
+                ]
+              : [
+                  '-',
+                  '-',
+                  isHotel
+                    ? 'No fully paid income records in this period'
+                    : 'No fully paid income records from other sources in this period',
+                  'Rs. 0',
+                  'Rs. 0',
+                  'Rs. 0',
+                ],
           ];
 
     autoTable(doc, {
@@ -638,25 +797,47 @@ export async function generatePartnerAnalyticsPDF(
       margin: { left: margin, right: margin, top: 24.5, bottom: 14 },
       showHead: 'everyPage',
       showFoot: 'lastPage',
-      head: [[
-        '#',
-        'DATE',
-        'PARTICULARS / CUSTOMER',
-        'BILLED (INR)',
-        'RECEIVED (INR)',
-        isHotel || isOther ? 'BALANCE (INR)' : 'BALANCE ASSIGNED (INR)',
-      ]],
+      head: isIndividualPartnerIncome
+        ? [[
+            '#',
+            'DATE',
+            'PARTICULARS / CUSTOMER',
+            'MEALS / PERSONS',
+            'BILLED (INR)',
+            'RECEIVED (INR)',
+            'BALANCE ASSIGNED (INR)',
+          ]]
+        : [[
+            '#',
+            'DATE',
+            'PARTICULARS / CUSTOMER',
+            'BILLED (INR)',
+            'RECEIVED (INR)',
+            isHotel || isOther ? 'BALANCE (INR)' : 'BALANCE ASSIGNED (INR)',
+          ]],
       body: incomeRows,
-      foot: [
-        [
-          '',
-          '',
-          isHotel ? 'TOTAL HOTEL INCOME' : isOther ? 'TOTAL OTHER INCOME' : `TOTAL ${normPartner} INCOME`,
-          formatIndianCurrency(totalIncomeBilled),
-          formatIndianCurrency(totalIncomeReceived),
-          formatIndianCurrency(isHotel || isOther ? 0 : totalIncomeBalance),
-        ],
-      ],
+      foot: isIndividualPartnerIncome
+        ? [
+            [
+              '',
+              '',
+              `TOTAL ${normPartner} INCOME`,
+              '',
+              formatIndianCurrency(totalIncomeBilled),
+              formatIndianCurrency(totalIncomeReceived),
+              formatIndianCurrency(totalIncomeBalance),
+            ],
+          ]
+        : [
+            [
+              '',
+              '',
+              isHotel ? 'TOTAL HOTEL INCOME' : 'TOTAL OTHER INCOME',
+              formatIndianCurrency(totalIncomeBilled),
+              formatIndianCurrency(totalIncomeReceived),
+              formatIndianCurrency(isHotel || isOther ? 0 : totalIncomeBalance),
+            ],
+          ],
       theme: 'grid',
       styles: {
         font: 'helvetica',
@@ -681,14 +862,24 @@ export async function generatePartnerAnalyticsPDF(
         fontSize: 7.2,
         cellPadding: { top: 1.6, bottom: 1.6, left: 1.8, right: 1.8 },
       },
-      columnStyles: {
-        0: { cellWidth: 10, halign: 'center' },
-        1: { cellWidth: 22 },
-        2: { cellWidth: 'auto', fontStyle: 'bold' },
-        3: { cellWidth: 28, halign: 'right' },
-        4: { cellWidth: 28, halign: 'right' },
-        5: { cellWidth: 36, halign: 'right', fontStyle: 'bold' },
-      },
+      columnStyles: isIndividualPartnerIncome
+        ? {
+            0: { cellWidth: 9, halign: 'center' },
+            1: { cellWidth: 19 },
+            2: { cellWidth: 'auto', fontStyle: 'bold' },
+            3: { cellWidth: 22, halign: 'center' },
+            4: { cellWidth: 26, halign: 'right' },
+            5: { cellWidth: 26, halign: 'right' },
+            6: { cellWidth: 30, halign: 'right', fontStyle: 'bold' },
+          }
+        : {
+            0: { cellWidth: 10, halign: 'center' },
+            1: { cellWidth: 22 },
+            2: { cellWidth: 'auto', fontStyle: 'bold' },
+            3: { cellWidth: 28, halign: 'right' },
+            4: { cellWidth: 28, halign: 'right' },
+            5: { cellWidth: 36, halign: 'right', fontStyle: 'bold' },
+          },
       didDrawPage: (data) => {
         drawPageHeader(data.pageNumber);
       },
