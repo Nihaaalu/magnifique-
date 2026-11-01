@@ -230,6 +230,18 @@ interface ExpenseGroupInternal {
   sampleDescriptions: string[];
 }
 
+/**
+ * Detects if an expense entry is a staff advance:
+ * - Matches the word ADVANCE or ADVANCES case-insensitively with normalized whitespace
+ * - Works dynamically for any person's name or advance description without hardcoded names
+ * - e.g. "YOGESH ADVANCE", "TEJAS ADVANCE", "GAGAN ADVANCE", "CHEF HOME ADVANCE", "ADVANCE TO GAGAN"
+ */
+export function isStaffAdvanceExpense(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  const normalized = raw.trim().toUpperCase().replace(/[_\s]+/g, ' ');
+  return /\bADVANCES?\b/i.test(normalized);
+}
+
 export function calculateExpenseDistribution(
   records: ExpenseRecord[]
 ): ExpenseDistributionResult {
@@ -240,7 +252,33 @@ export function calculateExpenseDistribution(
     const amount = Number(record.amount) || 0;
     totalExpense += amount;
 
-    const rawDesc = record.description || record.name || 'Unspecified';
+    const rawDesc = (
+      record.description ||
+      (record as any).description ||
+      record.name ||
+      (record as any).name ||
+      'Unspecified'
+    ).trim();
+
+    // Dedicated STAFF ADVANCE Grouping:
+    // Matches any advance case-insensitively and aggregates all such entries
+    // into one unified STAFF ADVANCE category.
+    if (isStaffAdvanceExpense(rawDesc)) {
+      const existingAdvance = groups.find((g) => g.baseKey === 'STAFF ADVANCE');
+      if (existingAdvance) {
+        existingAdvance.totalAmount += amount;
+        existingAdvance.sampleDescriptions.push(rawDesc);
+      } else {
+        groups.push({
+          baseKey: 'STAFF ADVANCE',
+          cleanName: 'STAFF ADVANCE',
+          totalAmount: amount,
+          sampleDescriptions: [rawDesc],
+        });
+      }
+      continue;
+    }
+
     const cleaned = cleanExpenseDescription(rawDesc);
     const baseKey = getExpenseBaseKey(rawDesc);
 
@@ -303,20 +341,27 @@ export function calculateExpenseDistribution(
     };
   });
 
-  // Build clean chartItems: Top 7 individual slices + "OTHER EXPENSES" for everything else
+  // Build clean chartItems: Top individual slices + "OTHER EXPENSES" for everything else
+  // STAFF ADVANCE is explicitly preserved as its own slice in the chart and exempt from OTHER EXPENSES
   const chartItems: ExpenseDistributionItem[] = [];
   const maxChartSlices = 7;
 
   if (items.length <= maxChartSlices) {
     chartItems.push(...items.map((it) => ({ ...it })));
   } else {
-    // Exactly Top 7
-    for (let i = 0; i < maxChartSlices; i++) {
-      chartItems.push({ ...items[i] });
-    }
-    // All items below top 7 combined into OTHER EXPENSES
-    const remainingItems = items.slice(maxChartSlices);
-    const otherAmount = remainingItems.reduce((sum, it) => sum + it.amount, 0);
+    const advanceItem = items.find((it) => it.name === 'STAFF ADVANCE');
+    const nonAdvanceItems = items.filter((it) => it.name !== 'STAFF ADVANCE');
+
+    // Reserve 1 slot for advanceItem if present so total major slices remain maxChartSlices
+    const topNonAdvanceCount = advanceItem ? maxChartSlices - 1 : maxChartSlices;
+    const topNonAdvance = nonAdvanceItems.slice(0, topNonAdvanceCount);
+    const remainingNonAdvance = nonAdvanceItems.slice(topNonAdvanceCount);
+
+    const mainSlices = advanceItem ? [...topNonAdvance, advanceItem] : topNonAdvance;
+    mainSlices.sort((a, b) => b.amount - a.amount);
+    chartItems.push(...mainSlices.map((it) => ({ ...it })));
+
+    const otherAmount = remainingNonAdvance.reduce((sum, it) => sum + it.amount, 0);
     if (otherAmount > 0) {
       const otherPct = totalExpense > 0 ? (otherAmount / totalExpense) * 100 : 0;
       chartItems.push({

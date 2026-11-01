@@ -106,8 +106,10 @@ export function processExpensesForPdf(
   let otherAmount = 0;
 
   for (const item of rawGroupedItems) {
+    const isStaffAdvance = item.name === 'STAFF ADVANCE';
     // Strictly amount < 10000 (₹10,000 is kept separate, ₹9,999 goes to Other Expenses)
-    if (item.amount < 10000) {
+    // STAFF ADVANCE is explicitly exempt from the ₹10,000 threshold and must always appear as its own separate row
+    if (item.amount < 10000 && !isStaffAdvance) {
       otherAmount += item.amount;
     } else {
       majorItems.push({ ...item });
